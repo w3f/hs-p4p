@@ -1,0 +1,12 @@
+# Not too useful, and needed to work-around brittany stupidities
+- ignore: {name: Redundant do}
+- ignore: {name: Redundant $}
+
+# Too sensitive
+- ignore: {name: Reduce duplication}
+- ignore: {name: Use camelCase}
+- ignore: {name: Parse error}
+
+# Too pointless / trivial / subjective
+- ignore: {name: Use isNothing}
+- ignore: {name: Use <}

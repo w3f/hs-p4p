@@ -1,5 +1,5 @@
 Cabal-Version: 2.2
-Name: p4p-proc
+Name: p4p-common
 Version: 0.0
 Build-Type: Simple
 License: AGPL-3.0-or-later
@@ -9,9 +9,9 @@ Maintainer: infinity0@pwned.gg
 Stability: alpha
 Homepage: https://github.com/infinity0/hs-p4p
 Bug-Reports: https://github.com/infinity0/hs-p4p/issues
-Synopsis: peer-for-peer library, pure process abstractions
-Description: TODO
-Category: Network, P2P, Process
+Synopsis: peer-for-peer library, common utilities
+Description: Common utilities that should be exported to other libraries.
+Category: Network, P2P, Common
 Tested-With: GHC >= 8.6
 
 Source-Repository head
@@ -44,26 +44,18 @@ Common generic
 Library
   Import: generic
   Build-Depends:
-      p4p-common
-    , containers
-    , lens
-    , mtl
-    , op
-    , primitive
-    , schedule
-    , transformers
+      constraints-extras
+    , dependent-sum
   HS-Source-Dirs: src
   Exposed-Modules:
-    P4P.Proc
-    P4P.Proc.Lens
-    P4P.Proc.Internal
-    P4P.Proc.Instances
+    Data.Type.Higher
+    Data.Type.Reflect
 
 Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-proc
+      p4p-common
     , doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
@@ -73,7 +65,7 @@ Test-Suite unit
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-proc
+      p4p-common
     , tasty
     , tasty-quickcheck
     , tasty-hunit
@@ -81,5 +73,3 @@ Test-Suite unit
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs
-  Other-Modules:
-      P4P.Proc.UnitTests

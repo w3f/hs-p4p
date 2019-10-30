@@ -1,0 +1,3 @@
+[submodule "contrib/schedule"]
+	path = contrib/schedule
+	url = https://github.com/infinity0/hs-schedule

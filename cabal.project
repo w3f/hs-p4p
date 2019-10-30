@@ -1,5 +1,7 @@
 packages:
+  contrib/*
   p4p-*
 
 write-ghc-environment-files:
-  never
+  -- otherwise doctest fails
+  always

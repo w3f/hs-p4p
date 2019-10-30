@@ -11,7 +11,7 @@ Homepage: https://github.com/infinity0/hs-p4p
 Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, simulations
 Description: TODO
-Category: Network, P2P, Example
+Category: Network, P2P, Simulation
 Tested-With: GHC >= 8.6
 
 Source-Repository head

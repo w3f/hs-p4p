@@ -1,0 +1,9 @@
+steps:
+  - simple_align: {}
+  - imports: {}
+  - language_pragmas: {}
+  - trailing_whitespace: {}
+
+language_extensions:
+  - FlexibleContexts # stylish-haskell bug, see jaspervdj/stylish-haskell#230
+  - MultiParamTypeClasses # stylish-haskell bug, see jaspervdj/stylish-haskell#103 and haskell-suite/haskell-src-exts#304
