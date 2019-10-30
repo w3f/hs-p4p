@@ -1,0 +1,5 @@
+packages:
+  p4p-*
+
+write-ghc-environment-files:
+  never

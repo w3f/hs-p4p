@@ -1,0 +1,72 @@
+Cabal-Version: 2.2
+Name: p4p-zero
+Version: 0.0
+Build-Type: Simple
+License: AGPL-3.0-or-later
+Copyright: 2020 Web3 Foundation <research@web3.foundation>
+Author: Ximin Luo <infinity0@pwned.gg>
+Maintainer: infinity0@pwned.gg
+Stability: alpha
+Homepage: https://github.com/infinity0/hs-p4p
+Bug-Reports: https://github.com/infinity0/hs-p4p/issues
+Synopsis: peer-for-peer library, empty example package
+Description: This package is a template for other P4P packages.
+Category: Network, P2P, Example
+Tested-With: GHC >= 8.6
+
+Source-Repository head
+  Type: git
+  Location: https://github.com/infinity0/hs-p4p
+
+Flag dev
+  Description: Set compile flags for development
+  Default:     False
+  Manual:      True
+
+Common generic
+  Default-Language: Haskell2010
+  Build-Depends: base >= 4 && < 5,
+  GHC-Options:
+    -Wall
+    -Wno-unused-matches
+    -Wredundant-constraints
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+  if flag(dev)
+    GHC-Options:
+      -Werror
+      -O2
+    -- some optimisations cause memory leaks; switch on -O2 and profiling so we
+    -- can detect this during development so it doesn't cause surprises later
+    GHC-Prof-Options:
+      -fprof-auto
+
+Library
+  Import: generic
+  Build-Depends:
+  HS-Source-Dirs: src
+  Exposed-Modules:
+    P4P.Zero
+
+Test-Suite doctests
+  Import: generic
+  GHC-Options: -threaded
+  Build-Depends:
+      p4p-zero
+    , doctest
+  HS-Source-Dirs: test
+  Type: exitcode-stdio-1.0
+  Main-Is: DocTests.hs
+
+Test-Suite unit
+  Import: generic
+  GHC-Options: -threaded
+  Build-Depends:
+      p4p-zero
+    , tasty
+    , tasty-quickcheck
+    , tasty-hunit
+    , checkers
+  HS-Source-Dirs: test
+  Type: exitcode-stdio-1.0
+  Main-Is: UnitTests.hs
