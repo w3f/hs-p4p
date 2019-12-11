@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, common utilities
 Description: Common utilities that should be exported to other libraries.
 Category: Network, P2P, Common
-Tested-With: GHC >= 8.6
+Tested-With: GHC >= 8.8.3
 
 Source-Repository head
   Type: git
@@ -44,11 +44,18 @@ Common generic
 Library
   Import: generic
   Build-Depends:
-      constraints-extras
-    , dependent-sum
+      lens
+    , template-haskell
+    -- Crypto.*
+    , bytestring
+    , cryptonite
+    , deepseq
+    , memory
   HS-Source-Dirs: src
   Exposed-Modules:
-    Data.Type.Higher
+    Control.Lens.TH.Extra
+    Crypto.Cipher.ChaCha.Extra
+    Crypto.Random.Extra
     Data.Type.Reflect
 
 Test-Suite doctests

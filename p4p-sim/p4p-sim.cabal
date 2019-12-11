@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, simulations
 Description: TODO
 Category: Network, P2P, Simulation
-Tested-With: GHC >= 8.6
+Tested-With: GHC >= 8.8.3
 
 Source-Repository head
   Type: git
@@ -44,10 +44,29 @@ Common generic
 Library
   Import: generic
   Build-Depends:
-      p4p-proc
+      p4p-common
+    , p4p-proc
+    , op
+    , containers
+    , cryptonite
+    , directory
+    , extra
+    , lens
+    , optparse-applicative
+    , safe
+    , schedule
+    , stm
+    , time
+    , transformers
+    , unliftio
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Sim
+    P4P.Sim.EchoProcess
+    P4P.Sim.Internal
+    P4P.Sim.IO
+    P4P.Sim.Options
+    P4P.Sim.Types
 
 Test-Suite doctests
   Import: generic
@@ -71,3 +90,21 @@ Test-Suite unit
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs
+
+Executable sim
+  Import: generic
+  GHC-Options: -threaded
+  Build-Depends:
+      p4p-sim
+    , p4p-proc
+    , p4p-common
+    , async
+    , containers
+    , dependent-sum
+    , directory
+    , op
+    , optparse-applicative
+    , readline
+    , unix
+  HS-Source-Dirs: app
+  Main-Is: Sim.hs

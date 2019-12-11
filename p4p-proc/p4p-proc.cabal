@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, pure process abstractions
 Description: TODO
 Category: Network, P2P, Process
-Tested-With: GHC >= 8.6
+Tested-With: GHC >= 8.8.3
 
 Source-Repository head
   Type: git

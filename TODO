@@ -1,0 +1,49 @@
+Design work
+===========
+
+Stats
+- follow the progress of various requests, might need a standardised way to
+  extract this information from a Proc
+- check out google's windowed availability thing, and see how to fit it into
+  this framework for general requests & protocols
+
+Abstractions
+- how to compose procs together, e.g. for a protocol with multiple subprotocols
+- how to deal with storage, e.g. disk access
+
+Execution
+- Integrating with a real networking stack
+  - since real stacks are impure, do this via commands (open stream, send data)
+    & events ("stream unblocked" for flow control, etc)
+- flow control like TCP - easy, but make a note of it for implementors somewhere
+
+
+Low-level features
+==================
+
+Stats
+- SizedMessage typeclass
+- general stats:
+  - messages & their size, between which neighbours, during which ticks
+  - add a command to request debug info
+
+later:
+- do save/load for specific individual procs
+
+
+High-level features
+===================
+
+- view network topology, either:
+  - explicit - nodes would have to tell this to us
+  - implicit - we determine this by messages passed between nodes
+
+- view/trace the progress of a request as it propagates through the network:
+  - nodes should update us with this information, devise a generic framework
+    for doing this for different protocols
+  - animate this in a video or gif?
+
+- large scale:
+  - set up a particular topology
+  - test whether nodes are able to self-organise within this topology
+  - test how resilient a topology is, under random faults and hostile attack
