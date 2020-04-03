@@ -57,6 +57,7 @@ Library
     P4P.Proc
     P4P.Proc.Lens
     P4P.Proc.Internal
+    P4P.Proc.Internal1
     P4P.Proc.Instances
 
 Test-Suite doctests

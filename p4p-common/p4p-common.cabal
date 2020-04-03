@@ -51,11 +51,16 @@ Library
     , cryptonite
     , deepseq
     , memory
+    -- Data.Type.Higher
+    , constraints-extras
+    , singletons
+    , some
   HS-Source-Dirs: src
   Exposed-Modules:
     Control.Lens.TH.Extra
     Crypto.Cipher.ChaCha.Extra
     Crypto.Random.Extra
+    Data.Type.Higher
     Data.Type.Reflect
 
 Test-Suite doctests
