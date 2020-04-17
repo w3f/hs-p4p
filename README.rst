@@ -7,10 +7,14 @@ p4p ("peer-for-peer"), a p2p networking library, in Haskell.
 This is currently **EXPERIMENTAL**.
 
 This is not your average networking library, it is *exceedingly opinionated* on
-how programs should be structured and architected. This enables advanced
-features not achievable in typical networking libraries, described below. It
-also includes various support frameworks that help to reduce the cost of
-adhering to the structure and architecture prescriptions.
+how programs should be structured. The main theme is to architect protocol
+implementations against a simple interface to an abstract runtime environment,
+rather than against the complex ones provided by popular operating systems.
+This makes it it easier to match a specification with its implementation, and
+enables advanced features not easily achievable in typical programs, described
+below. It also includes various support frameworks that help to reduce the cost
+of adhering to these structure and architecture prescriptions, that recover the
+convenience of the more complex runtime interfaces.
 
 .. contents::
 
@@ -44,6 +48,23 @@ Planned:
 - Actual examples of implemented protocols that are reasonably complex.
 
 - See TODO file, and grep for various TODO in the source code.
+
+Use-cases
+---------
+
+One major use-case is as follows:
+
+Typically, debugging production software involves lots of logging. However, no
+existing general logging system supports replaying the logs against the code,
+so that you can easily empirically test your theories as you attempt to figure
+out why the code exhibited a certain bug, or to write a fix for it. Instead,
+you must recreate the conditions of the bug afresh, which relies on you
+understanding it in the first place. This cyclic dependency can mean that the
+start of an attempt to debug a problem in a complex protocol can be very slow,
+especially in decentralised production environments without access to all
+nodes. Being able to replay the logs against both buggy and potentially-fixed
+versions of the code helps to greatly speed up this process.
+
 
 Background
 ===========
