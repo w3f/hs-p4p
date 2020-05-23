@@ -58,6 +58,7 @@ Library
     P4P.Proc.Lens
     P4P.Proc.Internal
     P4P.Proc.Instances
+    P4P.Proc.Util.FlowControl
 
 Test-Suite doctests
   Import: generic
