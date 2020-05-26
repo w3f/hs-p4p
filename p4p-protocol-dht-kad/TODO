@@ -1,0 +1,26 @@
+- Check that we don't send requests to ourselves
+
+Cleanups
+========
+
+- TODO(cleanup): turn Finish functions into timeout "cleanup" functions only, that assume their inputs exist
+
+- insertNodeId can maybe call oreqEnsure directly instead of icmdOReqRequest, then we don't need to screw around with "Maybe CmdId" etc
+
+- review uses of unsafeIx
+- TODO(log): turn more errors into LogMsg
+
+- TODO(bump-to): have IReq/ICmd bump their own timeouts every time something interesting happens
+
+later:
+- refactor & cleanup k-bucket maintenance code
+- TODO(addr)
+- TODO(retry)
+
+Rate limiting
+=============
+
+- Implement some policy-based bounded map where certain keys are exempt, or something
+  Then kRecvReq needs to be bounded
+  (and think about how to fold SentReqId into this)
+- Rework the bounds fer kSendReq and kRecvCmd in terms of the new policy-based bounded map

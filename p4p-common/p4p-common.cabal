@@ -51,11 +51,20 @@ Library
     , cryptonite
     , deepseq
     , memory
+    -- Control.Monad.*
+    , mtl
+    , transformers
+    -- Data.*
+    , containers
   HS-Source-Dirs: src
   Exposed-Modules:
+    Control.Lens.Extra
     Control.Lens.TH.Extra
+    Control.Monad.Trans.Except.Extra
     Crypto.Cipher.ChaCha.Extra
     Crypto.Random.Extra
+    Data.Map.Bounded
+    Data.Sequence.Extra
     Data.Type.Reflect
 
 Test-Suite doctests

@@ -1,6 +1,4 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE DeriveFoldable      #-}
-{-# LANGUAGE DeriveFunctor       #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE DeriveTraversable   #-}
 {-# LANGUAGE RankNTypes          #-}
@@ -29,7 +27,7 @@ allOptions = enumFrom minBound
 helps :: [String] -> Mod f a
 helps strs = helpDoc $ Just $ extractChunk $ vsepChunks $ fmap paragraph strs
 
-data SimProto = ProtoEcho
+data SimProto = ProtoEcho | ProtoKad
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 
 data SimLogging =

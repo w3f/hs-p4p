@@ -6,15 +6,23 @@
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 
 -- external
+import qualified Data.ByteString           as BS
 import qualified Data.Set                  as S
 
 import           Control.Monad             (forever)
 import           Control.Op
+import           Data.String               (IsString (..))
 import           Data.Word                 (Word64)
 import           P4P.Proc                  (Protocol (..))
 import           P4P.Proc.Instances        (MV (..), PrimMonad (..), newMutVar)
+
+-- external, kademlia
+import           Crypto.Random.Extra       (ChaChaDRGInsecure, seedFromWords)
+import           P4P.Protocol.DHT.Kademlia (KParams (..), KState, defaultParams,
+                                            emptyState)
 
 -- external, IO / readline
 import           Control.Concurrent.Async  (async, cancel, link, link2)
@@ -111,6 +119,7 @@ runSimIO' opt@SimOptions {..} simUserIO mkPState =
 
 data SProt p where
   SEcho :: SProt EchoState
+  SKad :: SProt (KState ChaChaDRGInsecure)
 
 withSProt
   :: SProt ps
@@ -118,6 +127,11 @@ withSProt
   -> a
 withSProt prot a = case prot of
   SEcho -> a
+  SKad  -> a
+
+mkDummyId :: (IsString a, Integral n) => n -> String -> a
+mkDummyId len pid =
+  fromString (replicate (fromIntegral len - length pid) ' ' <> pid)
 
 withSimProto
   :: SimOptions
@@ -125,6 +139,12 @@ withSimProto
   -> IO a
 withSimProto opt f = case simProto of
   ProtoEcho -> f SEcho $ \p -> EState [p] 0
+  ProtoKad  -> f SKad $ \p ->
+    let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick
+        seed   = seedFromWords @BS.ByteString (p, p, p, p, p)
+        nid    = mkDummyId (parH params) (show p)
+        addr   = show p
+    in  emptyState @_ @ChaChaDRGInsecure nid (pure addr) seed params
   where SimOptions {..} = opt
 
 -- run via stdin/stdout

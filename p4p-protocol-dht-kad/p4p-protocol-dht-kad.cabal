@@ -1,5 +1,5 @@
 Cabal-Version: 2.2
-Name: p4p-sim
+Name: p4p-protocol-dht-kad
 Version: 0.0
 Build-Type: Simple
 License: AGPL-3.0-or-later
@@ -9,9 +9,9 @@ Maintainer: infinity0@pwned.gg
 Stability: alpha
 Homepage: https://github.com/infinity0/hs-p4p
 Bug-Reports: https://github.com/infinity0/hs-p4p/issues
-Synopsis: peer-for-peer library, simulations
-Description: TODO
-Category: Network, P2P, Simulation
+Synopsis: peer-for-peer library, kademlia DHT protocol
+Description: Implementation of Kademlia DHT protocol and related.
+Category: Network, P2P, DHT
 Tested-With: GHC >= 8.8.3
 
 Source-Repository head
@@ -46,33 +46,29 @@ Library
   Build-Depends:
       p4p-common
     , p4p-proc
-    , op
+    , bytestring
     , containers
-    , cryptonite
-    , directory
     , extra
     , lens
-    , optparse-applicative
     , safe
     , schedule
-    , stm
-    , time
     , transformers
-    , unliftio
+    , vector
   HS-Source-Dirs: src
   Exposed-Modules:
-    P4P.Sim
-    P4P.Sim.EchoProcess
-    P4P.Sim.Internal
-    P4P.Sim.IO
-    P4P.Sim.Options
-    P4P.Sim.Types
+    P4P.Protocol.DHT.Kademlia
+    P4P.Protocol.DHT.Kademlia.Command
+    P4P.Protocol.DHT.Kademlia.Internal
+    P4P.Protocol.DHT.Kademlia.Message
+    P4P.Protocol.DHT.Kademlia.Request
+    P4P.Protocol.DHT.Kademlia.State
+    P4P.Protocol.DHT.Kademlia.Types
 
 Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-sim
+      p4p-protocol-dht-kad
     , doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
@@ -82,7 +78,11 @@ Test-Suite unit
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-sim
+      p4p-protocol-dht-kad
+    , p4p-common
+    , bytestring
+    , containers
+    , transformers
     , tasty
     , tasty-quickcheck
     , tasty-hunit
@@ -90,23 +90,5 @@ Test-Suite unit
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs
-
-Executable sim
-  Import: generic
-  GHC-Options: -threaded
-  Build-Depends:
-      p4p-sim
-    , p4p-proc
-    , p4p-protocol-dht-kad
-    , p4p-common
-    , async
-    , bytestring
-    , containers
-    , dependent-sum
-    , directory
-    , op
-    , optparse-applicative
-    , readline
-    , unix
-  HS-Source-Dirs: app
-  Main-Is: Sim.hs
+  Other-Modules:
+    P4P.Protocol.DHT.Kademlia.UnitTests
