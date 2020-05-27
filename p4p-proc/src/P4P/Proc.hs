@@ -18,7 +18,7 @@ module P4P.Proc
   , reactAllM
   , purely
   -- instances
-  , SL(..)
+  --, SL(..)
   , MV(..)
   )
 where

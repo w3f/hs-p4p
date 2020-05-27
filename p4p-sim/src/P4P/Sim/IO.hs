@@ -74,54 +74,6 @@ hGetLineOrEOF h = catchIOError
   (Just <$> hGetLine h)
   (\e -> if isEOFError e then pure Nothing else ioError e)
 
-type SimUserIO pid ui uo = (IO (Maybe (KV pid ui)), KV pid uo -> IO ())
-
-defaultSimUserIO
-  :: (Read pid, Show pid, Read ui, Show uo)
-  => IO (Maybe String)
-  -> SimUserIO pid ui uo
-defaultSimUserIO getInput =
-  let i = untilJustM $ getInput >>= \case
-        Nothing -> pure (Just Nothing) -- EOF, quit
-        Just s  -> if null s
-          then pure Nothing
-          else case readEither s of
-            Left  e -> putStrLn e >> pure Nothing
-            Right r -> pure (Just (Just r))
-      o = print
-  in  (i, o)
-
--- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO
-  :: IO (Maybe (KV pid ui) -> IO (), IO (KV pid uo), SimUserIO pid ui uo)
-tbQueueSimUserIO = do
-  qi <- newTBQueueIO 1
-  qo <- newTBQueueIO 1
-  let ri = atomically $ readTBQueue qi
-      ro = atomically $ readTBQueue qo
-      wi = atomically . writeTBQueue qi
-      wo = atomically . writeTBQueue qo
-  pure (wi, ro, (ri, wo))
-
-type SimLog pid ps
-  = ( Show pid
-    , Show (PAddr ps)
-    , Show (GMsgI ps)
-    , Show (GMsgO ps)
-    , Show (UserO ps)
-    )
-
-defaultSimLog
-  :: SimLog pid ps
-  => (SimO pid ps -> Bool)
-  -> String
-  -> Handle
-  -> (Tick, SimO pid ps)
-  -> IO ()
-defaultSimLog f tFmt h (t, evt) = when (f evt) $ do
-  tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
-  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
-
 mkHandle :: Either CInt FilePath -> IO Handle
 mkHandle fdOrFile = do
   h <- case fdOrFile of
@@ -191,14 +143,70 @@ type SimReRe pid ps
     , Read (PAddr ps)
     , Show (PMsg ps)
     , Read (PMsg ps)
+    , Ord (PAddr ps)
     )
+
+type SimUserIO pid ps = (IO (Maybe (SimUserI pid ps)), SimUserO pid ps -> IO ())
+
+defaultSimUserIO :: SimReRe pid ps => IO (Maybe String) -> SimUserIO pid ps
+defaultSimUserIO getInput =
+  -- support special "pid :~ msg" syntax for SimProcUserI / SimProcUserO
+  let i = untilJustM $ getInput >>= \case
+        Nothing -> pure (Just Nothing) -- EOF, quit
+        Just s  -> if null s
+          then pure Nothing
+          else case readEither s of
+            Right (pid :~ ui) -> pure (Just (Just (SimProcUserI pid ui)))
+            Left  _           -> case readEither s of
+              Right r -> pure (Just (Just r))
+              Left  e -> putStrLn e >> pure Nothing
+      o = \case
+        SimProcUserO pid uo -> print $ pid :~ uo
+        x                   -> print x
+  in  (i, o)
+
+-- | SimUserIO that reads/writes from TBQueues.
+tbQueueSimUserIO
+  :: IO
+       ( Maybe (SimUserI pid ps) -> IO ()
+       , IO (SimUserO pid ps)
+       , SimUserIO pid ps
+       )
+tbQueueSimUserIO = do
+  qi <- newTBQueueIO 1
+  qo <- newTBQueueIO 1
+  let ri = atomically $ readTBQueue qi
+      ro = atomically $ readTBQueue qo
+      wi = atomically . writeTBQueue qi
+      wo = atomically . writeTBQueue qo
+  pure (wi, ro, (ri, wo))
 
 -- | Convert a 'runClocked' input to 'SimI' format, with 'Nothing' (EOF) lifted
 -- to the top of the ADT structure.
-c2i :: Either Tick (Maybe a) -> Maybe (GMsg SimRuntimeI a v)
+c2i :: Either Tick (Maybe x) -> Maybe (GMsg SimRuntimeI x v)
 c2i (Right Nothing ) = Nothing
 c2i (Left  t       ) = Just (MsgRT (SimRTTick t))
 c2i (Right (Just a)) = Just (MsgUser a)
+
+type SimLog pid ps
+  = ( Show pid
+    , Show ps
+    , Show (PAddr ps)
+    , Show (GMsgI ps)
+    , Show (GMsgO ps)
+    , Show (UserO ps)
+    )
+
+defaultSimLog
+  :: SimLog pid ps
+  => (SimO pid ps -> Bool)
+  -> String
+  -> Handle
+  -> (Tick, SimO pid ps)
+  -> IO ()
+defaultSimLog f tFmt h (t, evt) = when (f evt) $ do
+  tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
+  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
 
 logAllNoUser :: GMsg r u (SimProcEvt pid ps) -> Bool
 logAllNoUser = \case
@@ -223,7 +231,7 @@ defaultRT
    . (SimLog pid ps, SimReRe pid ps)
   => SimOptions
   -> Tick
-  -> SimUserIO pid (UserI ps) (UserO ps)
+  -> SimUserIO pid ps
   -> SimIAction Handle
   -> SimOAction Handle
   -> IO (SimRT pid ps IO)
@@ -281,14 +289,13 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 
 runSimIO
   :: forall pid p
-   . (Sim pid p IO, SimLog pid (State p), SimReRe pid (State p), Ctx p IO)
+   . (Sim pid p IO, SimLog pid (State p), SimReRe pid (State p))
   => SimOptions
-  -> SimUserIO pid (UserI (State p)) (UserO (State p))
+  -> SimUserIO pid (State p)
   -> S.Set pid
-  -> (S.Set pid -> IO (M.Map pid p))
   -> (pid -> State p)
   -> IO (Either (NonEmpty SimError) ())
-runSimIO opt simUserIO initPids mkProcs mkPState =
+runSimIO opt simUserIO initPids mkPState =
   bracket (openIOAction simIOAction) closeIOAction $ \SimIOAction {..} -> do
     --print opt
     (iSimState, istate) <- case simIActRead simIState of
@@ -305,11 +312,7 @@ runSimIO opt simUserIO initPids mkProcs mkPState =
     let realNow = simNow iSimState
         mkRT    = defaultRT opt realNow simUserIO simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
-      procs <- mkProcs (M.keysSet istate)
-
-      proceedAll $ M.intersectionWith (,) procs istate
-      oSimState <- runSimulation rt procs iSimState
-      ostate    <- suspendAll procs
+      (ostate, oSimState) <- runSimulation @_ @p rt (istate, iSimState)
 
       let t = simNow oSimState
       whenJust (simOActCompare simOMsg) $ compareOMsg simError t Nothing

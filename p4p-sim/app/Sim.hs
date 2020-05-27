@@ -17,7 +17,7 @@ import           Control.Op
 import           Data.String               (IsString (..))
 import           Data.Word                 (Word64)
 import           P4P.Proc                  (Protocol (..))
-import           P4P.Proc.Instances        (MV (..), PrimMonad (..), newMutVar)
+import           P4P.Proc.Instances        (MV (..), PrimMonad (..))
 
 -- external, kademlia
 import           Crypto.Random.Extra       (ChaChaDRGInsecure, seedFromWords)
@@ -45,8 +45,8 @@ import           System.Posix.IO           (stdInput)
 import           System.Posix.Terminal     (queryTerminal)
 
 -- internal
-import           P4P.Sim                   (KV, Map, NonEmpty, Sim, SimError,
-                                            fromSet)
+import           P4P.Sim                   (NonEmpty, Sim, SimError, SimUserI,
+                                            SimUserO)
 import           P4P.Sim.EchoProcess       (EchoState (..))
 import           P4P.Sim.IO                (SimLog, SimReRe, SimUserIO,
                                             defaultSimUserIO, hGetLineOrEOF,
@@ -101,21 +101,18 @@ setupReadlineHistory history = do
 type Pid = Word64
 type MVP = MV (PrimState IO)
 
-mkProcs :: S.Set p -> IO (Map p (MVP ps))
-mkProcs pids =
-  traverse id <| flip fromSet pids <| \_ -> MV <$< newMutVar undefined
-
 type SimC ps = (Sim Pid (MVP ps) IO, SimLog Pid ps, SimReRe Pid ps)
 
 runSimIO'
-  :: SimC ps
+  :: forall ps
+   . SimC ps
   => SimOptions
-  -> SimUserIO Pid (UserI ps) (UserO ps)
+  -> SimUserIO Pid ps
   -> (Pid -> ps)
   -> IO (Either (NonEmpty SimError) ())
 runSimIO' opt@SimOptions {..} simUserIO mkPState =
   let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
-  in  runSimIO opt simUserIO initPids mkProcs mkPState
+  in  runSimIO @_ @(MVP ps) opt simUserIO initPids mkPState
 
 data SProt p where
   SEcho :: SProt EchoState
@@ -149,7 +146,7 @@ withSimProto opt f = case simProto of
 
 -- run via stdin/stdout
 runStd :: SimOptions -> IO ExitCode
-runStd opt = withSimProto opt $ \prot mkPState -> withSProt prot $ do
+runStd opt = withSimProto opt $ \(p :: SProt ps) mkPState -> withSProt p $ do
   getInput <- queryTerminal stdInput >>= \case
     False -> pure (hGetLineOrEOF stdin)
     True  -> do
@@ -160,7 +157,7 @@ runStd opt = withSimProto opt $ \prot mkPState -> withSProt prot $ do
       pure $ readline ("p4p " <> drop 5 (show simProto) <> "> ") >>= \case
         Nothing -> hPutStrLn stderr "" >> pure Nothing
         Just s  -> maybeAddHistory s >> pure (Just s)
-  runSimIO' opt (defaultSimUserIO getInput) mkPState >>= \case
+  runSimIO' @ps opt (defaultSimUserIO @_ @ps getInput) mkPState >>= \case
     Right ()  -> pure ExitSuccess
     Left  err -> do
       hPutStrLn stderr $ "simulation gave errors: " <> show err
@@ -168,22 +165,22 @@ runStd opt = withSimProto opt $ \prot mkPState -> withSProt prot $ do
   where SimOptions {..} = opt
 
 data SimTBHandles pid ps = SimTBHandles {
-    tbWI  :: !(Maybe (KV pid (UserI ps)) -> IO ())
-  , tbRO  :: !(IO (KV pid (UserO ps)))
+    tbWI  :: !(Maybe (SimUserI pid ps) -> IO ())
+  , tbRO  :: !(IO (SimUserO pid ps))
   , tbFin :: !(IO ())
   }
 
 -- run via tb-queues, can be loaded from GHCI
 runTB :: SimOptions -> IO (DSum SProt (SimTBHandles Pid))
-runTB opt = withSimProto opt $ \prot mkPState -> withSProt prot $ do
-  (tbWI, tbRO, simUserIO) <- tbQueueSimUserIO
-  aMain                   <- async $ runSimIO' opt simUserIO mkPState
+runTB opt = withSimProto opt $ \(p :: SProt ps) mkPState -> withSProt p $ do
+  (tbWI, tbRO, simUserIO) <- tbQueueSimUserIO @_ @ps
+  aMain                   <- async $ runSimIO' @ps opt simUserIO mkPState
   link aMain
   aRead <- async $ forever $ tbRO >>= print
   link aRead
   link2 aMain aRead
   let tbFin = cancel aMain >> cancel aRead
-  pure $ prot :=> SimTBHandles { .. }
+  pure $ p :=> SimTBHandles { .. }
 
 parseOptions :: [String] -> IO SimOptions
 parseOptions args =

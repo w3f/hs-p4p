@@ -102,8 +102,15 @@ class Protocol (State p) => Process p where
   -- | Constraint over execution environment type, e.g. 'Monad'.
   type Ctx p (m :: Type -> Type) :: Constraint
 
-  proceed :: Ctx p m => p -> State p -> m ()
+  -- | Create a new process with the given state.
+  proceed :: Ctx p m => State p -> m p
 
+  -- | Replace an existing process with the given state.
+  replace :: Ctx p m => p -> State p -> m ()
+
+  -- | Destroy a process and return its state.
+  --
+  -- The old process must never be used again.
   suspend :: Ctx p m => p -> m (State p)
 
   -- | Receive-address(es) of a process.
@@ -129,7 +136,7 @@ class Protocol (State p) => Process p where
   reactM pt i = do
     s <- suspend pt
     let (o, s') = react i s
-    proceed pt s'
+    replace pt s'
     pure o
 
 -- | Type alias for the address of a process.
@@ -145,9 +152,10 @@ reactAllM
 reactAllM p pinputs = pinputs >$> reactM p |> sequence >$> join
 
 -- | Execute a process purely.
-purely :: (Process p, Ctx p m, Monad m) => p -> m a -> State p -> m (a, State p)
-purely p exec pstate = do
-  proceed p pstate
-  a <- exec
+purely
+  :: (Process p, Ctx p m, Monad m) => (p -> m a) -> State p -> m (a, State p)
+purely execProcess pstate = do
+  p <- proceed pstate
+  r <- execProcess p
   s <- suspend p
-  pure (a, s)
+  pure (r, s)
