@@ -32,6 +32,12 @@ import           GHC.Stack                         (HasCallStack)
 import           P4P.Protocol.DHT.Kademlia.Message
 
 
+assertNowRunning
+  :: HasCallStack => SC.Task t -> SC.Schedule t -> ((), SC.Schedule t)
+assertNowRunning k sch = case SC.taskStatus k sch of
+  SC.TaskRunning _ -> ((), sch)
+  _                -> error "assertNowRunning: assertion failed"
+
 {- | An ongoing process to handle replies to a request from another node.
 
 The process lasts for a specified time, upon which we unconditionally finish
@@ -78,7 +84,7 @@ ireqEnsure lsched lireq timeout req mkRepBody = runState $ do
       -- TODO(retry): perhaps try sending to other addresses in nInfo too
       let repBody = ireqReply ireqProc
           reply   = replyForRequest req (Right repBody) now addr
-      pure ([reply, logEvt KProcessNopNew], Present ireqProc)
+      pure ([reply, kLog $ I_KProcessIgnoreDup kproc], Present ireqProc)
     Absent False -> do
       -- not enough space left in map, rate-limit them
       let reply = replyForRequest req (Left $ TryAgainLater timeout) now addr
@@ -90,27 +96,27 @@ ireqEnsure lsched lireq timeout req mkRepBody = runState $ do
       lt <- lsched %%= SC.after timeout (TOIReq reqSrc reqBody)
       let ireqProc =
             IReqProcess { ireqMsg = req, ireqTimeout = lt, ireqReply = repBody }
-      pure ([reply, logEvt KProcessNew], Present ireqProc)
+      pure ([reply, kLog $ I_KProcessNew kproc], Present ireqProc)
  where
   (reqSrc, reqBody) = fst $ ireqIndex req
   addr              = srcAddr req
-  logEvt            = kLog . IReqEvt (reqSrc, reqBody)
+  kproc             = KPIReq reqSrc reqBody
 
 -- | Finish an existing 'IReqProcess', after the timeout is complete.
-ireqFinish
-  :: Lens' s (SC.Schedule KTask)
+ireqDelete
+  :: HasCallStack
+  => Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody IReqProcess)
   -> NodeId
   -> RequestBody
   -> s
   -> ([KadO], s)
-ireqFinish lsched lireq reqSrc reqBody = runState $ do
+ireqDelete lsched lireq reqSrc reqBody = runState $ do
   lireq . at_ (reqSrc, reqBody) %%=! \case
     Present ireqProc -> do
-      _ <- lsched %%= SC.cancel (ireqTimeout ireqProc)  -- TODO(cleanup): instead, ensure task is active
-      pure ([logEvt KProcessDel], Absent True)
-    x -> pure ([logEvt KProcessNopDel], x)
-  where logEvt = kLog . IReqEvt (reqSrc, reqBody)
+      lsched %%= assertNowRunning (ireqTimeout ireqProc)
+      pure ([kLog $ I_KProcessDel $ KPIReq reqSrc reqBody], Absent True)
+    _ -> error "ireqDelete: called on non-existent process"
 
 data RetryState = RetryState
   { retryCount :: !Int
@@ -137,7 +143,7 @@ data OReqProcess = OReqProcess
   -- and 'RequestBody' must be consistent with the index of this process.
   , oreqTimeout :: !(SC.Task KTask) -- TOOReq
   -- ^ Task for timing out this whole process.
-  , oreqFuture  :: !(F.SFuture (Maybe CmdId) (F.TimedResult () ReplyBody))
+  , oreqFuture  :: !(F.SFuture CmdId (F.TimedResult () ReplyBody))
   -- ^ SFuture representing this OReqProcess. The number of CmdIds in State is
   -- already explicitly bounded so this does not need to be. If the key is
   -- Nothing this means some internal system process (e.g. Ping via insertNode)
@@ -160,7 +166,7 @@ newReqId = R.randomBytesGenerate . fromIntegral
 
 {- | Run a new or existing 'OReqProcess' for the given outgoing request.
 
-This does not link together the 'SFuture' and 'SExpect', so you /must/ call
+This does not link together the 'F.SFuture' and 'F.SExpect', so you /must/ call
 'F.sExpectFuture' after calling this function.
 -}
 oreqEnsure
@@ -178,7 +184,7 @@ oreqEnsure
 oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
   loreq . at_ (reqDst, reqBody) %%=! \case
     Present oreqProc -> do
-      pure ([logEvt KProcessNopNew], Present oreqProc)
+      pure ([kLog $ I_KProcessIgnoreDup kproc], Present oreqProc)
       -- TODO(bump-to): do anything else here, e.g bump timeouts?
     Absent False ->
       error
@@ -195,30 +201,30 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
                                  , oreqFuture  = F.SFWaiting mempty
                                  }
       loreqId . at reqId .= Just (reqDst, reqBody)
-      pure ([P.MsgProc request, logEvt KProcessNew], Present oreqProc)
+      pure ([P.MsgProc request, kLog $ I_KProcessNew kproc], Present oreqProc)
  where
   (idWidth, timeout, timeoutRetry) = par
-  logEvt                           = kLog . OReqEvt (reqDst, reqBody)
+  kproc                            = KPOReq reqDst reqBody
 
 {- | Finish an existing 'OReqProcess', after the timeout is complete.
 
-This does not link together the 'SFuture' and 'SExpect', so you /must/ call
+This does not link together the 'F.SFuture' and 'F.SExpect', so you /must/ call
 'F.sFutureResult' before calling this function.
 -}
-oreqFinish
-  :: Lens' s (SC.Schedule KTask)
+oreqDelete
+  :: HasCallStack
+  => Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> Lens' s (M.Map ReqId (NodeId, RequestBody))
   -> NodeId
   -> RequestBody
   -> s
   -> ([KadO], s)
-oreqFinish lsched loreq loreqId reqDst reqBody = runState $ do
+oreqDelete lsched loreq loreqId reqDst reqBody = runState $ do
   loreq . at_ (reqDst, reqBody) %%=! \case
     Present oreqProc -> do
-      _ <- lsched %%= SC.cancel (oreqTimeout oreqProc)  -- TODO(cleanup): instead, ensure task is active
+      lsched %%= assertNowRunning (oreqTimeout oreqProc)
       _ <- lsched %%= SC.cancel (retryTask $ oreqRetry oreqProc)
       loreqId %= sans (snd $ oreqIndex $ oreqMsg oreqProc)
-      pure ([logEvt KProcessDel], Absent True)
-    x -> pure ([logEvt KProcessNopDel], x)
-  where logEvt = kLog . OReqEvt (reqDst, reqBody)
+      pure ([kLog $ I_KProcessDel $ KPOReq reqDst reqBody], Absent True)
+    _ -> error "oreqDelete: called on non-existent process"

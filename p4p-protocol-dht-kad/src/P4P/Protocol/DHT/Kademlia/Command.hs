@@ -20,8 +20,7 @@ import           Control.Lens                      (Lens', itraversed, use,
                                                     (%%=), (%%@~), (&), (<.))
 import           Control.Lens.Extra                (at_, unsafeIx, (%%=!))
 import           Control.Lens.TH.Extra             (makeLenses_)
-import           Control.Monad.Trans.State.Strict  (StateT (..), runState,
-                                                    state)
+import           Control.Monad.Trans.State.Strict  (runState, state)
 import           Data.Foldable                     (toList)
 import           Data.Map                          (Map)
 import           Data.Map.Bounded                  (ValueAt (..))
@@ -46,23 +45,11 @@ data SimpleQuery r = SimpleQuery
   , sqErr  :: !(Set NodeId)
   , sqWait :: !(Set NodeId)
   -- ^ Nodes we have made a query to and are waiting on. This should be
-  -- precisely the number of 'ORequest's in our 'SExpect'.
+  -- precisely the number of 'OReqProcess's in our 'F.SExpect'.
   } deriving (Show, Read, Generic, Eq, Ord)
 
 newSimpleQuery :: NodeInfos' -> SimpleQuery r
 newSimpleQuery initNodes = SimpleQuery initNodes mempty mempty mempty
-
-data ICmdState =
-    ICSystemForever
-    -- ^ The command is an internal pseudo-command that never finishes.
-  | ICNewlyCreated
-    -- ^ The command was just created and has yet to initialise.
-  | ICLookingup !NodeId !(SimpleQuery ())
-    -- ^ The command is performing a lookup operation on some target key/node.
-  | ICInserting !Value !(SimpleQuery SC.TickDelta)
-    -- ^ The command is performing an insert operation on some value.
-  | ICFinished
-    deriving (Show, Read, Generic, Eq, Ord)
 
 data ICmdReply =
     ICGotNodes !NodeInfos
@@ -91,6 +78,8 @@ toCmdInput reqDst reqBody repBody = case (reqBody, repBody) of
   _ -> Nothing
   where reply = Just . ICReply reqDst . F.GotResult
 
+type ICmdState' = ICmdState (SimpleQuery ()) (SimpleQuery SC.TickDelta)
+
 
 -- | An ongoing process to handle commands from the local user.
 --
@@ -108,9 +97,9 @@ data ICmdProcess = ICmdProcess
   -- SFuture timeout tasks are of type TOOReq.
   , icmdResult   :: !(Maybe CommandReplyBody)
   -- ^ Some commands give a result, and then have to perform some extra
-  -- follow-up work, e.g. 'JoinNetwork' / 'LookupKey'. This field caches the
+  -- follow-up work, e.g. 'JoinNetwork' / 'LookupValue'. This field caches the
   -- result in the meantime, which can be resent to duplicate commands.
-  , icmdState    :: !ICmdState
+  , icmdState    :: !ICmdState'
   , icmdExternal :: !Bool
   -- ^ Whether the command was external (from a user) or internal (from an
   -- automated behaviour such as a bucket refresh). This determines whether we
@@ -123,34 +112,32 @@ cmdUserReply cmdId replyBody =
   P.MsgUser $ Right $ CommandReply cmdId $ Right replyBody
 
 type RunSExpect' s r v
-  =  (NodeId, RequestBody)
-  -> Maybe CmdId
-  -> Lens' s (F.SFuture (Maybe CmdId) r)
+  =  Lens' s (F.SFuture CmdId r)
   -> Lens' s (F.SExpect (NodeId, RequestBody) KTask)
   -> Lens' s (SC.Schedule KTask)
-  -> s
-  -> (Either F.SFError v, s)
+  -> (NodeId, RequestBody)
+  -> CmdId
+  -> v
 
-stateSExpect_
-  :: (HasCallStack, Monad m)
+sExpect_
+  :: HasCallStack
   => Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> RunSExpect' s (F.TimedResult () ReplyBody) v
-  -> NodeId
-  -> RequestBody
-  -> Maybe CmdId
-  -> StateT s m (Either F.SFError v)
-stateSExpect_ lsched licmd loreq f reqDst reqBody cmdId = state $ f
-  (reqDst, reqBody)
-  cmdId
-  (loreq . unsafeIx (reqDst, reqBody) . _oreqFuture)
+  -> (NodeId, RequestBody)
+  -> CmdId
+  -> v
+sExpect_ lsched licmd loreq f reqKey cmdId = f
+  (loreq . unsafeIx reqKey . _oreqFuture)
   (licmd . unsafeIx cmdId . _icmdExpect)
   lsched
+  reqKey
+  cmdId
 
 icmdEnsure
   :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> Command
   -> Bool
@@ -158,13 +145,13 @@ icmdEnsure
   -> s
   -> ([KadO], s)
 icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
-  licmd . at_ (Just cmdId) %%=! \case
+  licmd . at_ cmdId %%=! \case
     Present cmdProc -> do
       -- duplicate Command
       let out = case (icmdResult cmdProc, icmdExternal cmdProc) of
             (Just reply, True) -> [cmdUserReply cmdId reply]
             _                  -> []
-      pure (out <> [logEvt KProcessNopNew], Present cmdProc)
+      pure (out <> [kLog $ I_KProcessIgnoreDup kproc], Present cmdProc)
     Absent False -> do
       -- not enough space left in map, rate-limit them
       let reply = CommandReply cmdId $ Left $ TryAgainLater timeout
@@ -178,15 +165,15 @@ icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
                                 , icmdState    = ICNewlyCreated
                                 , icmdExternal = isExternal
                                 }
-      pure ([logEvt KProcessNew], Present cmdProc)
+      pure ([kLog $ I_KProcessNew kproc], Present cmdProc)
  where
   Command {..} = cmd
-  logEvt       = kLog . ICmdEvt cmdId
+  kproc        = KPICmd cmdId
 
 -- assumes the icmd/oreq both exist
 icmdOReqExpect_
   :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> SC.TickDelta
   -> CmdId
@@ -195,25 +182,20 @@ icmdOReqExpect_
   -> (F.TimedResult () ReplyBody -> s -> ([KadO], s))
   -> s
   -> ([KadO], s)
-icmdOReqExpect_ lsched licmd loreq timeout cmdId reqDst reqBody runR =
-  runState $ do
-    let tk = TOICmdOReq cmdId reqDst reqBody
-    res <- stateSExpect_ lsched
-                         licmd
-                         loreq
-                         (F.sExpectFuture timeout tk)
-                         reqDst
-                         reqBody
-                         (Just cmdId)
-    case res of
-      Left  e        -> pure [kLog $ ICmdErr cmdId KProcessStepAdd e]
-      Right Nothing  -> pure []
-      Right (Just r) -> state $ runR r
+icmdOReqExpect_ lsched licmd loreq to cmdId reqDst reqBody runR = runState $ do
+  let tk     = TOICmdOReq cmdId reqDst reqBody
+  let reqKey = (reqDst, reqBody)
+  res <- state $ do
+    sExpect_ lsched licmd loreq F.sExpectFuture reqKey cmdId to tk
+  case res of
+    Left  e        -> pure [kLog $ D_ICmdOReqIgnoreDup cmdId reqDst reqBody]
+    Right Nothing  -> pure []
+    Right (Just r) -> state $ runR r
 
 -- assumes the icmd/oreq both exist
 icmdOReqCancel_
   :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> CmdId
   -> NodeId
@@ -221,70 +203,65 @@ icmdOReqCancel_
   -> s
   -> ([KadO], s)
 icmdOReqCancel_ lsched licmd loreq cmdId reqDst reqBody = runState $ do
-  res <- stateSExpect_ lsched
-                       licmd
-                       loreq
-                       F.sExpectCancel
-                       reqDst
-                       reqBody
-                       (Just cmdId)
+  let reqKey = (reqDst, reqBody)
+  res <- state $ sExpect_ lsched licmd loreq F.sExpectCancel reqKey cmdId
   case res of
-    Left  e  -> pure [kLog $ ICmdErr cmdId KProcessStepRem e]
+    Left  e  -> pure [kLog $ D_ICmdOReqIgnoreMis cmdId reqDst reqBody]
     Right () -> pure []
 
 oreqResultFuture_
   :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> F.TimedResult () ReplyBody
   -> NodeId
   -> RequestBody
-  -> (F.OSet (Maybe CmdId) -> s -> ([KadO], s))
+  -> (F.OSet CmdId -> s -> ([KadO], s))
   -> s
   -> ([KadO], s)
 oreqResultFuture_ lsched licmd loreq result reqDst reqBody runW = runState $ do
   res <- state $ F.sFutureSettled
-    result
-    (reqDst, reqBody)
     (loreq . unsafeIx (reqDst, reqBody) . _oreqFuture)
     (licmd . itraversed <. _icmdExpect)
     lsched
+    (reqDst, reqBody)
+    result
   case res of
-    Left  e -> pure [kLog $ OReqEvt (reqDst, reqBody) KProcessNopStep]
+    Left  e -> pure [kLog $ I_OReqIgnoreDupReply reqDst reqBody]
     Right w -> state $ runW w
 
 icmdCancelAll_
   :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> CmdId
   -> s
   -> ([KadO], s)
 icmdCancelAll_ lsched licmd loreq cmdId = runState $ do
-  sse <- use $ licmd . unsafeIx (Just cmdId) . _icmdExpect . F._seExpects
+  sse <- use $ licmd . unsafeIx cmdId . _icmdExpect . F._seExpects
   e   <- sse & itraversed %%@~ \(reqDst, reqBody) lt -> do
     state $ icmdOReqCancel_ lsched licmd loreq cmdId reqDst reqBody
   pure (concat (toList e))
 
 -- | Finish an existing 'ICmdProcess', after the timeout is complete.
-icmdFinish
-  :: Lens' s (SC.Schedule KTask)
-  -> Lens' s (BM.BMap (Maybe CmdId) ICmdProcess)
+icmdDelete
+  :: HasCallStack
+  => Lens' s (SC.Schedule KTask)
+  -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> CmdId
   -> SC.TickDelta
   -> s
   -> ([KadO], s)
-icmdFinish lsched licmd loreq cmdId timeout = runState $ do
-  licmd . at_ (Just cmdId) %%=! \case
+icmdDelete lsched licmd loreq cmdId timeout = runState $ do
+  licmd . at_ cmdId %%=! \case
     Present cmdProc -> do
       errors <- state $ icmdCancelAll_ lsched licmd loreq cmdId
-      lsched %%= SC.cancel_ (icmdTimeout cmdProc) -- TODO(cleanup): instead, ensure task is active
+      lsched %%= assertNowRunning (icmdTimeout cmdProc)
       -- send a timeout reply if the command had produced no reply so far
       let out =
             [ cmdUserReply cmdId (CommandTimedOut timeout)
             | icmdExternal cmdProc && isNothing (icmdResult cmdProc)
             ]
-      pure (errors <> out <> [logEvt KProcessDel], Absent True)
-    Absent b -> pure ([logEvt KProcessNopDel], Absent b)
-  where logEvt = kLog . ICmdEvt cmdId
+      pure (errors <> out <> [kLog $ I_KProcessDel $ KPICmd cmdId], Absent True)
+    _ -> error $ "icmdDelete: called on non-existent process: " <> show cmdId

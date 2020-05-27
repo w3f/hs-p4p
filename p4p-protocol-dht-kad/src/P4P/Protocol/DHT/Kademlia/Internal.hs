@@ -57,7 +57,7 @@ import qualified P4P.Proc                          as P
 import qualified P4P.Proc.Lens                     as P
 
 import           Control.Lens                      (Lens', at, ix, sans, use,
-                                                    zoom, (%%~), (%=), (%~),
+                                                    (%%=), (%%~), (%=), (%~),
                                                     (.=), (^?), _Wrapped)
 import           Control.Lens.Extra                (unsafeIx, (%%=!), (%&&&%))
 import           Control.Monad                     (join, void, when)
@@ -117,12 +117,9 @@ statewT'
   -> StateT s (WriterT wo m) ()
 statewT' f x = stateWT' f (pure . x)
 
-{-# INLINE schedule #-}
-schedule
-  :: Monad m
-  => (SC.Schedule KTask -> (a, SC.Schedule KTask))
-  -> StateT (State g) m a
-schedule = state . _kSchedule
+{-# INLINE writeLog #-}
+writeLog :: Monad m => KLogMsg -> StateT (State g) (WriterT [KadO] m) ()
+writeLog msg = lift $ tell [kLog msg]
 
 
 nodeUpdateAddr
@@ -138,12 +135,12 @@ kPutValue :: Key -> Value -> State drg -> (SC.TickDelta, State drg)
 kPutValue k v s0 = flip runState s0 $ do
   whenJust (kStore ^? ix k) $ \StoreEntry {..} -> do
     -- cancel any old tasks associated with the old value
-    schedule $ SC.cancel_ sRepub
-    schedule $ SC.cancel_ sExpire
+    _kSchedule %%= SC.cancel_ sRepub
+    _kSchedule %%= SC.cancel_ sExpire
   -- we should take the minimum of the above value and parIntvValExpire
   let expire = parIntvValExpire
-  lt  <- schedule $ SC.after parIntvValRepub $ RepublishKey k
-  lt' <- schedule $ SC.after expire $ ExpireKey k
+  lt  <- _kSchedule %%= SC.after parIntvValRepub (RepublishKey k)
+  lt' <- _kSchedule %%= SC.after expire (ExpireKey k)
   let ent = StoreEntry { sValue = v, sOwn = False, sRepub = lt, sExpire = lt' }
   _kStore . at k .= Just ent
   pure expire
@@ -163,8 +160,8 @@ kRefreshBucketOnly idx s0 = flip runStateT s0 $ do
     -- we are either currently running this task, or being manually refreshed
     -- before the timer is up, e.g. by JoinNetwork. either way, cancel_ is
     -- appropriate here as renew only works if the task is pending.
-    schedule $ SC.cancel_ lt
-    fmap ((), ) $ schedule $ SC.after parIntvKBRefresh (RefreshBucket idx)
+    _kSchedule %%= SC.cancel_ lt
+    fmap ((), ) $ _kSchedule %%= SC.after parIntvKBRefresh (RefreshBucket idx)
   pure nId
  where
   State {..}   = s0
@@ -273,7 +270,7 @@ insertNodeId rTick isPong nodeId srcAddr s0 = flip runStateWT s0 $ do
       nodeToPing <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
         bEntriesInsert parK nodeId srcAddr tick isPong
       whenJust (join nodeToPing) $ \nInfo -> do
-        stateWT $ icmdOReqRequest Nothing (nodeInfoOf nInfo) Ping
+        stateWT $ oreqRequest (nodeInfoOf nInfo) Ping
  where
   State {..}   = s0
   KParams {..} = kParams
@@ -340,8 +337,8 @@ icmdStart
   :: (Monad m, R.DRG' g) => Command -> Bool -> State g -> m ([KadO], State g)
 icmdStart cmd isExternal s0 = flip runStateWT s0 $ do
   statewT $ icmdEnsure _kSchedule _kRecvCmd _kSentReq cmd isExternal parTOICmd
-  cmdProc <- use $ _kRecvCmd . unsafeIx (Just cmdId)
-  stateWT $ icmdRunInput cmdId cmdProc ICStart
+  cmdProc <- use $ _kRecvCmd . unsafeIx cmdId
+  stateWT $ icmdRunInput cmdId cmdProc Nothing ICStart
  where
   State {..}   = s0
   KParams {..} = kParams
@@ -435,26 +432,43 @@ icmdRunInput
   :: (Monad m, R.DRG' g)
   => CmdId
   -> ICmdProcess
+  -> Maybe (F.TimedResult () ReplyBody)
   -> ICmdInput
   -> State g
   -> m ([KadO], State g)
-icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
+icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
   s     <- use qState
   reply <- kQuery (s, input)
   whenJust reply $ \r -> do
     when (icmdExternal cmdProc) $ do
       lift $ tell [P.MsgUser $ Right $ CommandReply cmdId $ Right r]
-    _kRecvCmd . unsafeIx (Just cmdId) . _icmdResult .= Just r
+    _kRecvCmd . unsafeIx cmdId . _icmdResult .= Just r
  where
   State { kParams }   = s0
   KParams {..}        = kParams
   Command { cmdBody } = icmdCmd cmdProc
 
-  qState :: Lens' (State g) ICmdState
-  qState = _kRecvCmd . unsafeIx (Just cmdId) . _icmdState
+  qState :: Lens' (State g) ICmdState'
+  qState = _kRecvCmd . unsafeIx cmdId . _icmdState
+
+  qStateSet qs1 = lift . tell =<< qState %%= \qs0 ->
+    let qs0' = icmdStateSummary qs0
+        qs1' = icmdStateSummary qs1
+        out  = [ kLog $ I_ICmdStateChange cmdId qs1' | qs1' /= qs0' ]
+    in  (out, qs1)
+
+  inputIgnored s = do
+    case (rep, input) of
+      (Just (F.GotResult r), ICReply repSrc (F.GotResult _)) ->
+        writeLog $ I_ICmdIgnoredInvalidInputGivenState cmdId
+                                                       repSrc
+                                                       r
+                                                       (icmdStateSummary s)
+      _ -> error "should not be ignoring this"
+    pure Nothing
 
   finishWithResult r = do
-    qState .= ICFinished
+    qStateSet ICFinished
     pure $ Just r
 
   cancelExistingOReqs = statewT $ do
@@ -465,9 +479,6 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
     -- Note: duplicate replies are already filtered out by 'icmdOReqExpect_'
     -- before control hits this function, but perhaps we should assert that none
     -- of the below "Set.delete" are nops
-
-    (ICSystemForever, _) ->
-      error $ "icmdRunInput ICSystemForever with cmdId " <> show cmdId
 
     (ICNewlyCreated, ICStart) -> do
       case cmdBody of
@@ -507,12 +518,12 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
           -- associated with creation timestamps, wait for the query to finish &
           -- insert the most-recent one.
           --continueInsert val $ newSimpleQuery undefined {- TODO -}
-          qState .= ICFinished
+          qStateSet ICFinished
           -- below will remain, even after we perform the above change - i.e.
           -- we output a result before we actually finish the ICmdProcess.
           pure $ Just $ LookupValueReply $ Right val
 
-        _ -> ignored -- invalid reply
+        _ -> inputIgnored $ ICLookingup key qs
 
     (ICInserting val qs, ICReply repSrc (F.TimedOut ())) -> do
       continueInsert val $ qs { sqErr  = Set.insert repSrc (sqErr qs)
@@ -529,13 +540,12 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
                               , sqWait = Set.delete repSrc (sqWait qs)
                               }
 
-    _ -> ignored
-    where ignored = pure Nothing -- TODO(log): log ignored input
+    (s, _) -> inputIgnored s
 
   continueLookup key qs = do
     let (next, qs') =
           kSimpleLookup (fromIntegral parAlpha) (fromIntegral parK) key qs
-    qState .= ICLookingup key qs'
+    qStateSet $ ICLookingup key qs'
     case next of
       Left toQuery -> do
         let reqBody = cmdOReq cmdBody key
@@ -547,7 +557,7 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
           -- in a more intelligent way. This requires this info to be available
           -- in the 'GetNodeReply' etc messages.
           let nInfo = NodeInfo nId $ S.bFromList $ toList nAddr
-          stateWT $ icmdOReqRequest (Just cmdId) nInfo reqBody
+          stateWT $ icmdOReqRequest cmdId nInfo reqBody
         pure Nothing
       Right res -> cancelExistingOReqs >> case cmdBody of
         JoinNetwork nInfo -> do
@@ -574,7 +584,7 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
 
   continueInsert val qs = do
     let (next, qs') = kSimpleInsert (fromIntegral parAlpha) qs
-    qState .= ICInserting val qs'
+    qStateSet $ ICInserting val qs'
     case next of
       Left toQuery -> do
         let key     = cmdSubj (error "unreachable") $ cmdBody
@@ -582,29 +592,24 @@ icmdRunInput cmdId cmdProc input s0 = flip runStateWT s0 $ do
         for_ (M.toList toQuery) $ \(nId, nAddr) -> do
           -- TODO(addr): pass in timestamp data, etc as above
           let nInfo = NodeInfo nId $ S.bFromList $ toList nAddr
-          stateWT $ icmdOReqRequest (Just cmdId) nInfo reqBody
+          stateWT $ icmdOReqRequest cmdId nInfo reqBody
         pure Nothing
       Right res -> cancelExistingOReqs >> case cmdBody of
         LookupValue _ -> do
-          qState .= ICFinished
+          qStateSet $ ICFinished
           pure Nothing -- result was previously output already
         InsertValue k v -> do
           finishWithResult $ InsertValueReply res
         _ -> error "unreachable"
 
-
-{- | Make an outgoing request on behalf of the given 'ICmdProcess'.
-
-Partial function: The 'ICmdProcess' must already exist.
--}
-icmdOReqRequest
+{- | Make an outgoing request. -}
+oreqRequest
   :: (Monad m, R.DRG' g)
-  => Maybe CmdId
-  -> NodeInfo NodeAddr
+  => NodeInfo NodeAddr
   -> RequestBody
   -> State g
   -> m ([KadO], State g)
-icmdOReqRequest cmdId nInfo reqBody s0 = flip runStateWT s0 $ do
+oreqRequest nInfo reqBody s0 = flip runStateWT s0 $ do
   let NodeInfo reqDst reqDstAddrs = nInfo
   let mkMsg now req = Msg { src     = kSelf s0
                           , srcAddr = mempty -- Proc runtime will set this properly, via setSource
@@ -615,15 +620,31 @@ icmdOReqRequest cmdId nInfo reqBody s0 = flip runStateWT s0 $ do
                           , body    = Left req
                           }
   statewT $ oreqEnsure' mkMsg reqDst reqBody
-  whenJust cmdId $ \cId -> do
-    statewT $ icmdOReqExpect_' cId reqDst reqBody $ \r -> do
-      runIdentity . icmdOReqResult (Just cId) reqDst reqBody r
  where
   State {..}   = s0
   KParams {..} = kParams
   par          = (parH, parTOOReq, parTOOReqRetry)
-  oreqEnsure'  = do
-    oreqEnsure _kRng _kSchedule _kSentReq _kSentReqId par
+  oreqEnsure'  = oreqEnsure _kRng _kSchedule _kSentReq _kSentReqId par
+
+{- | Make an outgoing request on behalf of the given 'ICmdProcess'.
+
+Partial function: The 'ICmdProcess' must already exist.
+-}
+icmdOReqRequest
+  :: (Monad m, R.DRG' g)
+  => CmdId
+  -> NodeInfo NodeAddr
+  -> RequestBody
+  -> State g
+  -> m ([KadO], State g)
+icmdOReqRequest cmdId nInfo reqBody s0 = flip runStateWT s0 $ do
+  stateWT $ oreqRequest nInfo reqBody
+  let NodeInfo reqDst _ = nInfo
+  statewT $ icmdOReqExpect_' cmdId reqDst reqBody $ \r -> do
+    runIdentity . icmdOReqResult cmdId reqDst reqBody r
+ where
+  State {..}       = s0
+  KParams {..}     = kParams
   icmdOReqExpect_' = do
     icmdOReqExpect_ _kSchedule _kRecvCmd _kSentReq parTOICmdOReq
 
@@ -633,7 +654,7 @@ Partial function: The 'ICmdProcess' must already exist.
 -}
 icmdOReqResult
   :: (Monad m, R.DRG' g)
-  => Maybe CmdId
+  => CmdId
   -> NodeId
   -> RequestBody
   -> F.TimedResult () ReplyBody
@@ -642,15 +663,17 @@ icmdOReqResult
 icmdOReqResult cmdId reqDst reqBody rep s0 = flip runStateWT s0 $ do
   -- If cmdId is Nothing, we don't need to clear results, since we never put
   -- them there in the first place, in icmdOReqRequest
-  whenJust cmdId $ \cId -> do
-    case kRecvCmd ^? ix cmdId of
-      Nothing ->
-        -- should be unreachable due to other checks
-        error $ "icmdOReqResult: non-existent cId: " <> show cId
-      Just cmdProc -> do
-        case toCmdInput reqDst reqBody rep of
-          Nothing       -> pure () -- TODO(log): log a warning about the invalid reply / state
-          Just cmdInput -> stateWT $ icmdRunInput cId cmdProc cmdInput
+  case kRecvCmd ^? ix cmdId of
+    Nothing ->
+      -- should be unreachable due to other checks
+      error $ "icmdOReqResult: non-existent cmdId: " <> show cmdId
+    Just cmdProc -> do
+      case toCmdInput reqDst reqBody rep of
+        Nothing -> case rep of
+          F.GotResult r -> writeLog $ W_ICmdIgnoredInvalidInput cmdId reqDst r
+          _             -> error "unreachable"
+        Just cmdInput ->
+          stateWT $ icmdRunInput cmdId cmdProc (Just rep) cmdInput
  where
   State {..}   = s0
   KParams {..} = kParams
@@ -664,7 +687,7 @@ kHandleInput
 kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
   P.MsgRT (P.RTTick realNow task) -> case task of
     SelfCheck -> runExceptT (checkState s0) >>= \case
-      Left  err -> pure () -- TODO(log): log a warning
+      Left  err -> writeLog $ W_SelfCheckFailed err
       Right ()  -> pure ()
     RefreshBucket idx -> stateWT $ kRefreshBucket idx
     RepublishKey  key -> do
@@ -675,22 +698,22 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
     ExpireKey key -> do
       let StoreEntry {..} =
             fromJustNote "ExpireKey couldn't find key" $ kStore ^? ix key
-      schedule $ SC.cancel_ sRepub
+      _kSchedule %%= SC.cancel_ sRepub
       -- don't need to cancel expire since that is already running
       _kStore %= sans key
-      -- TODO(log): log info
+      writeLog $ I_KeyExpired key
     TOOReqReply dst    reqBody -> pure ()
       -- TODO(retry): forward to the OReqProcess logic, to trigger a retry
     TOOReq      reqDst reqBody -> do
       stateWT $ oreqResult_ reqDst reqBody (F.TimedOut ()) icmdOReqResult
-      statewT $ oreqFinish' reqDst reqBody
-    TOIReq reqSrc reqBody           -> statewT $ ireqFinish' reqSrc reqBody
+      statewT $ oreqDelete' reqDst reqBody
+    TOIReq reqSrc reqBody           -> statewT $ ireqDelete' reqSrc reqBody
     TOICmdOReq cmdId reqDst reqBody -> do
       -- note: we don't distinguish between the icmd vs the oreq timing out,
       -- but here is where we would do it in future, if we need to
       statewT $ icmdOReqCancel_' cmdId reqDst reqBody
-      stateWT $ icmdOReqResult (Just cmdId) reqDst reqBody (F.TimedOut ())
-    TOICmd cmdId -> statewT $ icmdFinish' cmdId parTOICmd
+      stateWT $ icmdOReqResult cmdId reqDst reqBody (F.TimedOut ())
+    TOICmd cmdId -> statewT $ icmdDelete' cmdId parTOICmd
   P.MsgUser cmd -> stateWT $ icmdStart cmd True
   P.MsgProc msg -> case body msg of
     Left Request {..} -> do
@@ -705,7 +728,7 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
       Left  rej -> pure () -- TODO(retry): handle this, OReqProcess should wait & retry
       Right r   -> case oreqProc' of
         Nothing -> do
-          pure () -- TODO(log): log a warning
+          writeLog $ W_InvalidMessage msg "reply to a request we didn't make"
         Just oreqProc -> stateWT $ do
           let (reqDst, reqBody) = fst $ oreqIndex $ oreqMsg oreqProc
           oreqResult_ reqDst reqBody (F.GotResult r) icmdOReqResult
@@ -713,9 +736,9 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
   State {..}         = s0
   KParams {..}       = kParams
   ireqEnsure'        = ireqEnsure _kSchedule _kRecvReq parTOIReq
-  ireqFinish'        = ireqFinish _kSchedule _kRecvReq
-  oreqFinish'        = oreqFinish _kSchedule _kSentReq _kSentReqId
-  icmdFinish'        = icmdFinish _kSchedule _kRecvCmd _kSentReq
+  ireqDelete'        = ireqDelete _kSchedule _kRecvReq
+  oreqDelete'        = oreqDelete _kSchedule _kSentReq _kSentReqId
+  icmdDelete'        = icmdDelete _kSchedule _kRecvCmd _kSentReq
   oreqResultFuture_' = oreqResultFuture_ _kSchedule _kRecvCmd _kSentReq
   icmdOReqCancel_'   = icmdOReqCancel_ _kSchedule _kRecvCmd _kSentReq
 
@@ -739,14 +762,13 @@ kInput input s0 = flip runStateWT s0 $ do
           Right Reply {..} ->
             ( kSentReqId ^? ix repReqId >>= \k -> kSentReq ^? ix k
             , P.MsgProc <$> pingReplyToRequest recvMsg
-            , Just dst
+            , Just (dst, recvMsg)
             )
-          _ -> (Nothing, Nothing, Just dst)
+          _ -> (Nothing, Nothing, Just (dst, recvMsg))
         _ -> (Nothing, Nothing, Nothing)
   case maybeDst of
-    Just dst | dst /= kSelf s0 -> do
-      -- TODO(log): log a warning
-      pure ()
+    Just (dst, msg) | dst /= kSelf s0 -> do
+      writeLog $ W_InvalidMessage msg "message with destination not ourselves"
     _ -> do
       stateWT $ kInsertNode input oreqProc'
       stateWT $ kHandleInput input oreqProc'
@@ -757,7 +779,7 @@ kInput input s0 = flip runStateWT s0 $ do
 
 kInput'
   :: (R.DRG' g, Monad m) => KadI' -> StateT (State g) (WriterT [KadO] m) ()
-kInput' = tickTask (zoom _kSchedule . state) P._MsgI_RTTick (stateWT . kInput)
+kInput' = tickTask (_kSchedule %%=) P._MsgI_RTTick (stateWT . kInput)
 
 instance P.Protocol (State g) where
   type PMsg (State g) = Msg

@@ -18,13 +18,13 @@ import qualified Data.Map.Strict                   as M
 import qualified Data.Sequence.Extra               as S
 import qualified Data.Vector                       as V
 
-import           Control.Applicative               (liftA3)
+import           Control.Applicative               (liftA2)
 import           Control.Lens                      (itraversed, ix, traversed,
-                                                    (%%@~), (%%~), (.~), (^?!))
-import           Control.Lens.Extra                (at_, unsafeIx)
+                                                    (%%@~), (%%~), (^?!))
+import           Control.Lens.Extra                (unsafeIx)
 import           Control.Lens.TH                   (makeWrapped)
 import           Control.Lens.TH.Extra             (makeLenses_)
-import           Control.Monad                     (unless, void)
+import           Control.Monad                     (void)
 import           Control.Monad.Extra               (whenJust)
 import           Control.Monad.Trans.Except        (ExceptT, throwE)
 import           Control.Monad.Trans.Except.Extra  (ErrMsg, checkConsistent,
@@ -116,9 +116,9 @@ defaultParams tickHz = KParams { parH             = 32
                                , parMaxReqPerNode = 256
                                , parMaxReqNodes   = 1024
                                , parMaxCmd        = 4096
-                               , parTOOReqRetry   = 4 * t
-                               , parTOOReq        = 64 * t
-                               , parTOIReq        = 64 * t
+                               , parTOOReqRetry   = 1 * t
+                               , parTOOReq        = 16 * t
+                               , parTOIReq        = 16 * t
                                , parTOICmdOReq    = 16 * t
                                , parTOICmd        = 256 * t
                                , parIntvKBRefresh = 4096 * t
@@ -245,7 +245,7 @@ data State drg = State
   -- | Commands we've received (from either the local user or internally e.g.
   -- automatically refreshing a bucket) and are currently handling.
   -- TODO(rate): bounded Map, except for "system" commands
-  , kRecvCmd   :: !(BM.BMap (Maybe CmdId) ICmdProcess)
+  , kRecvCmd   :: !(BM.BMap CmdId ICmdProcess)
   } deriving (Show, Read, Generic, Eq)
 makeLenses_ ''State
 
@@ -266,13 +266,13 @@ checkState State {..} = do
     checkTaskPending prefix (ireqTimeout v) "TOIReq"
   void $ kRecvCmd & itraversed %%@~ \k ICmdProcess {..} -> do
     void $ F.seExpects icmdExpect & traversed %%~ \t -> do
-      checkTaskPending ("kRecvCmd/" <> show k) t "TOICmdOReq"
-    unless (k == Nothing) $ do
+      checkTaskPending ("kRecvCmd/" <> show k) t           "TOICmdOReq"
       checkTaskPending ("kRecvCmd/" <> show k) icmdTimeout "TOICmd"
  where
   KParams {..} = kParams
   checkTaskPending n t c = case SC.taskStatus t kSchedule of
     SC.TaskPending _ k -> checkConstrName n k c
+    SC.TaskRunning _   -> checkConsistent "kSelfCheck" n c "SelfCheck"
     _                  -> throwE $ n <> ": task not pending: " <> show t
   getSentReqIdx OReqProcess {..} = (dst, ) . Just <$> getReqBody body
     where Msg {..} = oreqMsg
@@ -305,30 +305,19 @@ emptyState self addrs seed params = State
   , kRecvReq   = BM.newBMap2 (fromIntegral parMaxReqNodes)
                              (fromIntegral parMaxReqPerNode)
   , kRecvCmd   = BM.newBMap (fromIntegral parMaxCmd)
-                   & (at_ Nothing .~ BM.Present fakeCmdProc)
   }
  where
   KParams {..} = params
   parHBits'    = parHBits params
-  fakeCmdId    = BS.pack []
-  fakeCmd      = LookupNode self
-  fakeCmdProc  = ICmdProcess { icmdCmd      = Command fakeCmdId fakeCmd
-                             , icmdExternal = False
-                             , icmdTimeout  = fakeCmdTmo
-                             , icmdState    = ICSystemForever
-                             , icmdResult   = Nothing
-                             , icmdExpect   = mempty
-                             }
-  ((refreshes, selfCheck, fakeCmdTmo), sched) =
-    runIdentity $ flip runStateT SC.newSchedule $ liftA3
-      (,,)
+  ((refreshes, selfCheck), sched) =
+    runIdentity $ flip runStateT SC.newSchedule $ liftA2
+      (,)
       (for (V.generate parHBits' id) $ \i -> do
         -- stagger the refreshes evenly
         let t = parIntvKBRefresh * fromIntegral i `div` fromIntegral parHBits'
         state $ SC.after t (RefreshBucket i)
       )
       (state $ SC.after 0 SelfCheck)
-      (state $ SC.after 0 $ TOICmd fakeCmdId)
 
 newCmdId :: R.DRG' drg => State drg -> (ReqId, State drg)
 newCmdId s@State {..} = (reqid, s { kRng = kRng' })

@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor   #-}
 {-# LANGUAGE DeriveGeneric   #-}
+{-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies    #-}
@@ -8,17 +9,18 @@
 module P4P.Protocol.DHT.Kademlia.Message where
 
 -- external
-import qualified Control.Monad.Schedule  as SC
-import qualified Control.Schedule.Future as F
-import qualified Data.ByteString         as BS
-import qualified Data.Map.Strict         as M
-import qualified Data.Sequence.Extra     as S
-import qualified P4P.Proc                as P
+import qualified Control.Monad.Schedule as SC
+import qualified Data.ByteString        as BS
+import qualified Data.Map.Strict        as M
+import qualified Data.Sequence.Extra    as S
+import qualified P4P.Proc               as P
 
-import           Control.Lens.TH.Extra   (makeLenses_)
-import           GHC.Generics            (Generic)
-import           GHC.Stack               (HasCallStack)
+import           Control.Lens.TH.Extra  (makeLenses_)
+import           GHC.Generics           (Generic)
+import           GHC.Stack              (HasCallStack)
 
+
+{- | * External message types and other definitions. -}
 
 type NodeAddr = String -- TODO: real address
 type Value = BS.ByteString
@@ -156,29 +158,68 @@ data CommandReplyBody =
     deriving (Show, Read, Generic, Eq, Ord)
 
 
-{- | Logging message types -}
+{- | * Logging message types, mostly for internal usage. -}
 
--- | Data structure summarising some event relating to a generic process.
-data KProcessEvt =
-    KProcessNew
-  | KProcessStepAdd
-  | KProcessStepRem
-  | KProcessDel
-  | KProcessNopNew
-  | KProcessNopStep
-  | KProcessNopDel
+data ICmdState lookup insert =
+    ICNewlyCreated
+    -- ^ The command was just created and has yet to initialise.
+  | ICLookingup !NodeId !lookup
+    -- ^ The command is performing a lookup operation on some target key/node.
+  | ICInserting !Value !insert
+    -- ^ The command is performing an insert operation on some value.
+  | ICFinished
     deriving (Show, Read, Generic, Eq, Ord)
 
--- TODO: CommandUpdate for status / progress reports
+icmdStateSummary :: ICmdState lookup insert -> ICmdState () ()
+icmdStateSummary = \case
+  ICNewlyCreated  -> ICNewlyCreated
+  ICLookingup k _ -> ICLookingup k ()
+  ICInserting v _ -> ICInserting v ()
+  ICFinished      -> ICFinished
+
+-- | Data structure summarising an internal ongoing process
+data KProcess =
+    KPICmd !CmdId
+  | KPIReq !ReqId !RequestBody
+  | KPOReq !ReqId !RequestBody
+    deriving (Show, Read, Generic, Eq, Ord)
+
 data KLogMsg =
-    ICmdErr !CmdId !KProcessEvt !F.SFError
-  | ICmdEvt !CmdId !KProcessEvt
-  | IReqEvt !(ReqId, RequestBody) !KProcessEvt
-  | OReqEvt !(ReqId, RequestBody) !KProcessEvt
+    W_SelfCheckFailed !String
+    -- ^ A self-check failed.
+    -- This suggests a major programming error.
+  | W_InvalidMessage !Msg !String
+    -- ^ Top-level processing ignored an invalid message.
+    -- This means someone on the network is playing tricks with us.
+  | W_ICmdIgnoredInvalidInput !CmdId !NodeId !ReplyBody
+    -- ^ 'ICommand' ignored an invalid input.
+    -- This means someone on the network is playing tricks with us.
+  | I_ICmdIgnoredInvalidInputGivenState !CmdId !NodeId !ReplyBody !(ICmdState () ())
+    -- ^ 'ICommand' ignored an input which was invalid for the current state.
+    -- This probably means the reply was slightly delayed, and not malicious.
+  | I_ICmdStateChange !CmdId !(ICmdState () ())
+    -- ^ 'ICommand' changed state (summarised).
+  | I_OReqIgnoreDupReply !ReqId !RequestBody
+    -- ^ Ignored a duplicate reply to an outgoing request.
+    -- This probably means the network is experiencing congestion.
+  | I_KeyExpired !Key
+    -- ^ A key was expired and deleted from our store.
+  | I_KProcessNew !KProcess
+    -- ^ A kprocess was started.
+  | I_KProcessIgnoreDup !KProcess
+    -- ^ Ignored a duplicate attempt to start a new kprocess.
+  | I_KProcessDel !KProcess
+    -- ^ A kprocess was deleted.
+  | D_ICmdOReqIgnoreDup !CmdId !ReqId !RequestBody
+    -- ^ Ignored a duplicate attempt to expect an outgoing request.
+    -- This suggests a minor programming error.
+  | D_ICmdOReqIgnoreMis !CmdId !ReqId !RequestBody
+    -- ^ Ignored a duplicate attempt to forget an outgoing request.
+    -- This suggests a minor programming error.
     deriving (Show, Read, Generic, Eq, Ord)
 
 
-{- | Top-level message types -}
+{- | * Top-level message types -}
 
 type KUserI = Command
 type KUserO = Either KLogMsg CommandReply

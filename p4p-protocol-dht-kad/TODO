@@ -1,15 +1,13 @@
-- Check that we don't send requests to ourselves
+- ! enforce the bounds on the bounded data structures
+
+- Check that we don't send requests to ourselves. Although it doesn't matter
+  too much, we cache and re-use them anyways...
 
 Cleanups
 ========
 
-- TODO(cleanup): turn Finish functions into timeout "cleanup" functions only, that assume their inputs exist
-
-- insertNodeId can maybe call oreqEnsure directly instead of icmdOReqRequest, then we don't need to screw around with "Maybe CmdId" etc
-
+- drop unnecessary monadic stuff in Internal.hs
 - review uses of unsafeIx
-- TODO(log): turn more errors into LogMsg
-
 - TODO(bump-to): have IReq/ICmd bump their own timeouts every time something interesting happens
 
 later:
