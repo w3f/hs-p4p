@@ -1,6 +1,9 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE EmptyDataDeriving #-}
-{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE DeriveGeneric        #-}
+{-# LANGUAGE EmptyDataDeriving    #-}
+{-# LANGUAGE StandaloneDeriving   #-}
+{-# LANGUAGE TemplateHaskell      #-}
+{-# LANGUAGE TypeFamilies         #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module P4P.Sim.Types where
 
@@ -18,7 +21,7 @@ import           Data.Set              (Set)
 import           Data.Void             (Void)
 import           GHC.Generics          (Generic)
 import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
-                                        Protocol (..))
+                                        Protocol (..), RuntimeI, RuntimeO)
 
 
 -- | A pair that is slightly easier to type
@@ -36,15 +39,6 @@ data SimProcEvt' pid i o a =
  deriving (Eq, Ord, Show, Read, Generic)
 makePrisms ''SimProcEvt'
 type SimProcEvt pid ps = SimProcEvt' pid (GMsgI ps) (GMsgO ps) (PAddr ps)
-
--- | Runtime input into the sim.
-data SimRuntimeI =
-    SimRTTick !Tick
- deriving (Eq, Ord, Show, Read, Generic)
-
--- | Runtime output from the sim.
-data SimRuntimeO
- deriving (Eq, Ord, Show, Read, Generic)
 
 -- | All state relating to a process in the simulation.
 --
@@ -75,11 +69,19 @@ data SimUserO' pid ps uo i a =
 makePrisms ''SimUserO'
 type SimUserO pid ps = SimUserO' pid ps (UserO ps) (GMsgI ps) (PAddr ps)
 
+data SimAuxO' pid ao i o a =
+    SimUserAuxO !pid !ao
+  | SimProcEvent !(SimProcEvt' pid i o a)
+  -- :^ TODO: filter out User messages, these are already represented elsewhere
+ deriving (Eq, Ord, Show, Read, Generic)
+makePrisms ''SimAuxO'
+type SimAuxO pid ps = SimAuxO' pid (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
+
 -- | Input into the sim.
-type SimI pid ps = GMsg SimRuntimeI (SimUserI pid ps) Void
+type SimI pid ps = GMsg (RuntimeI ()) (SimUserI pid ps) Void Void
 
 -- | Output from the sim.
-type SimO pid ps = GMsg SimRuntimeO (SimUserO pid ps) (SimProcEvt pid ps)
+type SimO pid ps = GMsg (RuntimeO Void) (SimUserO pid ps) Void (SimAuxO pid ps)
 
 -- | A known probability distribution, non-negative.
 data KnownDistNonNeg a =
@@ -128,3 +130,25 @@ data SimError =
     }
     -- ^ Failed to compare replay at the given tick.
  deriving (Eq, Ord, Show, Read, Generic)
+
+data SimFullState pid ps = SimFullState
+  { simProcs :: !(Map pid ps)
+  , simState :: !(SimState pid ps)
+  }
+ deriving (Generic)
+-- note: we are forced to do this to define @instance Protocol@, because we
+-- can't apply type families in the instance declaration.
+deriving instance (Eq (Map pid ps), Eq (SimState pid ps))
+  => Eq (SimFullState pid ps)
+deriving instance (Ord (Map pid ps), Ord (SimState pid ps))
+  => Ord (SimFullState pid ps)
+deriving instance (Show (Map pid ps), Show (SimState pid ps))
+  => Show (SimFullState pid ps)
+deriving instance (Read (Map pid ps), Read (SimState pid ps))
+  => Read (SimFullState pid ps)
+
+instance Protocol (SimFullState pid ps) where
+  type PMsg (SimFullState pid ps) = Void
+  type UserI (SimFullState pid ps) = SimUserI pid ps
+  type UserO (SimFullState pid ps) = SimUserO pid ps
+  type AuxO (SimFullState pid ps) = SimAuxO pid ps

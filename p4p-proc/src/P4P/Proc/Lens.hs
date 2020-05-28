@@ -24,10 +24,10 @@ _RuntimeI_RTTick
 _RuntimeI_RTTick f (RTTick tick _) = uncurry RTTick <$> f tick
 
 -- | Convience lens composition for use with
--- 'Control.Monad.Trans.Schedule.State.tickTask'.
+-- 'Control.Monad.Schedule.tickTask'.
 _MsgI_RTTick
   :: Applicative f
   => (Tick -> f (Tick, ti))
-  -> GMsg (RuntimeI ()) u p
-  -> f (GMsg (RuntimeI ti) u p)
+  -> GMsg (RuntimeI ()) u p a
+  -> f (GMsg (RuntimeI ti) u p a)
 _MsgI_RTTick = _MsgRT . _RuntimeI_RTTick

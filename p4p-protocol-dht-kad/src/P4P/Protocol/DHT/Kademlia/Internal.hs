@@ -441,7 +441,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
   reply <- kQuery (s, input)
   whenJust reply $ \r -> do
     when (icmdExternal cmdProc) $ do
-      lift $ tell [P.MsgUser $ Right $ CommandReply cmdId $ Right r]
+      lift $ tell [P.MsgUser $ CommandReply cmdId $ Right r]
     _kRecvCmd . unsafeIx cmdId . _icmdResult .= Just r
  where
   State { kParams }   = s0
@@ -785,6 +785,7 @@ instance P.Protocol (State g) where
   type PMsg (State g) = Msg
   type UserI (State g) = KUserI
   type UserO (State g) = KUserO
+  type AuxO (State g) = KLogMsg
 
 instance R.DRG' g => P.Proc (State g) where
   getAddrs s = toList $ niNodeAddr $ ownNodeInfo s

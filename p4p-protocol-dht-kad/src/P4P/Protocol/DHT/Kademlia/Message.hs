@@ -222,16 +222,16 @@ data KLogMsg =
 {- | * Top-level message types -}
 
 type KUserI = Command
-type KUserO = Either KLogMsg CommandReply
+type KUserO = CommandReply
 
 instance P.ProtoMsg Msg where
   type Addr Msg = NodeAddr
   getTarget = dstAddr
   setSource srcAddr' m = m { srcAddr = srcAddr' }
 
-type KadI' = P.GMsg (P.RuntimeI ()) KUserI Msg
-type KadI = P.GMsg (P.RuntimeI KTask) KUserI Msg
-type KadO = P.GMsg (P.RuntimeO NodeAddr) KUserO Msg
+type KadI' = P.GMsg (P.RuntimeI ()) KUserI Msg P.Void
+type KadI = P.GMsg (P.RuntimeI KTask) KUserI Msg P.Void
+type KadO = P.GMsg (P.RuntimeO NodeAddr) KUserO Msg KLogMsg
 
 kLog :: KLogMsg -> KadO
-kLog = P.MsgUser . Left
+kLog = P.MsgAux

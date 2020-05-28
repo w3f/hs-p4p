@@ -3,6 +3,9 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE TypeFamilies      #-}
 
+-- GHC bug, default implementations for a class includes subclass constraint
+{-# OPTIONS_GHC -Wno-error=redundant-constraints #-}
+
 module P4P.Proc.Internal where
 
 -- external
@@ -10,6 +13,7 @@ import           Control.Monad (join)
 import           Control.Op
 import           Data.Kind     (Constraint, Type)
 import           Data.Schedule (Tick)
+import           Data.Void     (Void)
 import           GHC.Generics  (Generic)
 
 
@@ -27,6 +31,12 @@ class ProtoMsg msg where
   -- | Set the source of a message received by a process, used by the execution
   -- environment to hint the receipt of an incoming message.
   setSource :: Addr msg -> msg -> msg
+
+-- | Void message, for local-only processes such as simulations.
+instance ProtoMsg Void where
+  type Addr Void = Void
+  getTarget = id
+  setSource = const id
 
 -- | Input from the runtime execution environment to a process.
 --
@@ -50,18 +60,27 @@ class ProtoMsg (PMsg ps) => Protocol ps where
   type UserI ps :: Type
   -- | Type of message from a process to the user.
   type UserO ps :: Type
+  -- | Type of auxiliary message from a process.
+  type AuxO ps :: Type
+  type AuxO ps = Void
 
 type PAddr ps = Addr (PMsg ps)
 
 {- | General message, from/to the runtime, the user, or another process. -}
-data GMsg r u p
+data GMsg r u p a
   = MsgRT !r
+  -- ^ Message from/to the runtime.
   | MsgUser !u
+  -- ^ Message from/to the user, or another trusted local process.
   | MsgProc !p
+  -- ^ Message from/to an external untrusted process.
+  | MsgAux !a
+  -- ^ Message from/to auxillary sources, e.g. for logging or debugging
+  -- purposes. This is exempted from the deterministic behaviour contract.
  deriving (Eq, Ord, Show, Read, Generic)
 
-type GMsgI ps = GMsg (RuntimeI ()) (UserI ps) (PMsg ps)
-type GMsgO ps = GMsg (RuntimeO (Addr (PMsg ps))) (UserO ps) (PMsg ps)
+type GMsgI ps = GMsg (RuntimeI ()) (UserI ps) (PMsg ps) Void
+type GMsgO ps = GMsg (RuntimeO (Addr (PMsg ps))) (UserO ps) (PMsg ps) (AuxO ps)
 
 -- | Pure communicating process.
 --
@@ -98,7 +117,7 @@ class Protocol ps => Proc ps where
 --
 -- A process that is completely pure in its implementation need not provide an
 -- instance of this class directly, but rather should provide an instance of
--- 'Proc' and then use one of our generic instances for 'Process' listed below.
+-- 'Proc' and then use one of our instances for 'PureProcess', listed below.
 -- OTOH a process that must "cheat" can implement this class directly, as long
 -- as it has deterministic behaviour. For example, if it wants to perform disk
 -- accesses directly for convenience during initial development, where the risk
@@ -109,9 +128,6 @@ class Protocol (State p) => Process p where
   type State p
   -- | Constraint over execution environment type, e.g. 'Monad'.
   type Ctx p (m :: Type -> Type) :: Constraint
-
-  -- | Run a pure state-machine in the process.
-  runPure :: Ctx p m => p -> (State p -> (a, State p)) -> m a
 
   -- | Create a new process with the given state.
   proceed :: Ctx p m => State p -> m p
@@ -134,14 +150,19 @@ class Protocol (State p) => Process p where
   reactM :: Ctx p m => p -> ProcMsgI p -> m [ProcMsgO p]
 
   default getAddrsM
-    :: (Ctx p m, Proc (State p))
+    :: (Ctx p m, PureProcess p, Proc (State p))
     => p -> m [ProcAddr p]
   getAddrsM pt = runPure pt $ \s -> (getAddrs s, s)
 
   default reactM
-    :: (Ctx p m, Proc (State p))
+    :: (Ctx p m, PureProcess p, Proc (State p))
     => p -> ProcMsgI p -> m [ProcMsgO p]
   reactM pt = runPure pt . react
+
+-- | A process that can embed arbitrary pure computations over its state.
+class Process p => PureProcess p where
+  -- | Run a pure state-machine in the process.
+  runPure :: Ctx p m => p -> (State p -> (a, State p)) -> m a
 
 -- | Type alias for the address of a process.
 type ProcAddr p = PAddr (State p)

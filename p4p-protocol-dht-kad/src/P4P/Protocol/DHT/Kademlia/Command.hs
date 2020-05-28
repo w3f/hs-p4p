@@ -108,8 +108,7 @@ data ICmdProcess = ICmdProcess
 makeLenses_ ''ICmdProcess
 
 cmdUserReply :: CmdId -> CommandReplyBody -> KadO
-cmdUserReply cmdId replyBody =
-  P.MsgUser $ Right $ CommandReply cmdId $ Right replyBody
+cmdUserReply cmdId replyBody = P.MsgUser $ CommandReply cmdId $ Right replyBody
 
 type RunSExpect' s r v
   =  Lens' s (F.SFuture CmdId r)
@@ -155,7 +154,7 @@ icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
     Absent False -> do
       -- not enough space left in map, rate-limit them
       let reply = CommandReply cmdId $ Left $ TryAgainLater timeout
-      pure ([P.MsgUser $ Right reply], Absent False)
+      pure ([P.MsgUser reply], Absent False)
     Absent True -> do
       lt <- lsched %%= SC.after timeout (TOICmd cmdId)
       let cmdProc = ICmdProcess { icmdCmd      = cmd

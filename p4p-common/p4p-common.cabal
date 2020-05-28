@@ -45,6 +45,7 @@ Library
   Import: generic
   Build-Depends:
       lens
+    , mutable-lens
     , template-haskell
     -- Crypto.*
     , bytestring
@@ -60,6 +61,7 @@ Library
   Exposed-Modules:
     Control.Lens.Extra
     Control.Lens.TH.Extra
+    Control.Monad.Compat
     Control.Monad.Trans.Except.Extra
     Crypto.Cipher.ChaCha.Extra
     Crypto.Random.Extra

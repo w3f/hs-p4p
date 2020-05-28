@@ -9,6 +9,7 @@ module P4P.Proc
   , GMsg(..)
   , GMsgI
   , GMsgO
+  , Void
   -- proc
   , Proc(..)
   , Process(..)
@@ -23,5 +24,6 @@ module P4P.Proc
   )
 where
 
+import           Data.Void          (Void)
 import           P4P.Proc.Instances
 import           P4P.Proc.Internal

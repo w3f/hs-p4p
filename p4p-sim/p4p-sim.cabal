@@ -52,6 +52,7 @@ Library
     , directory
     , extra
     , lens
+    , mutable-lens
     , optparse-applicative
     , safe
     , schedule

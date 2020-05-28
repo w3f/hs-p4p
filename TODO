@@ -7,15 +7,18 @@ Stats
 - check out google's windowed availability thing, and see how to fit it into
   this framework for general requests & protocols
 
-Abstractions
-- how to compose procs together, e.g. for a protocol with multiple subprotocols
-- how to deal with storage, e.g. disk access
-
 Execution
 - Integrating with a real networking stack
   - since real stacks are impure, do this via commands (open stream, send data)
     & events ("stream unblocked" for flow control, etc)
-- flow control like TCP - easy, but make a note of it for implementors somewhere
+- Flow control, do we need anything more on top of P4P.Proc.Util.FlowControl?
+
+Later
+-----
+
+Abstractions
+- how to compose procs together, e.g. for a protocol with multiple subprotocols
+- how to deal with storage, e.g. disk access
 
 
 Low-level features
@@ -27,8 +30,8 @@ Stats
   - messages & their size, between which neighbours, during which ticks
   - add a command to request debug info
 
-later:
-- do save/load for specific individual procs
+Execution
+- Save/load for specific individual procs
 
 
 High-level features

@@ -183,9 +183,9 @@ tbQueueSimUserIO = do
 
 -- | Convert a 'runClocked' input to 'SimI' format, with 'Nothing' (EOF) lifted
 -- to the top of the ADT structure.
-c2i :: Either Tick (Maybe x) -> Maybe (GMsg SimRuntimeI x v)
+c2i :: Either Tick (Maybe x) -> Maybe (GMsg (RuntimeI ()) x v a)
 c2i (Right Nothing ) = Nothing
-c2i (Left  t       ) = Just (MsgRT (SimRTTick t))
+c2i (Left  t       ) = Just (MsgRT (RTTick t ()))
 c2i (Right (Just a)) = Just (MsgUser a)
 
 type SimLog pid ps
@@ -195,6 +195,7 @@ type SimLog pid ps
     , Show (GMsgI ps)
     , Show (GMsgO ps)
     , Show (UserO ps)
+    , Show (AuxO ps)
     )
 
 defaultSimLog
@@ -208,15 +209,15 @@ defaultSimLog f tFmt h (t, evt) = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
   hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
 
-logAllNoUser :: GMsg r u (SimProcEvt pid ps) -> Bool
+logAllNoUser :: GMsg r u p a -> Bool
 logAllNoUser = \case
   MsgUser _ -> False
   _         -> True
 
-logAllNoUserTicks :: GMsg r u (SimProcEvt pid ps) -> Bool
+logAllNoUserTicks :: GMsg r u p (SimAuxO pid ps) -> Bool
 logAllNoUserTicks = \case
   MsgUser _ -> False
-  MsgProc (SimMsgRecv _ (MsgRT (RTTick _ _))) -> False
+  MsgAux (SimProcEvent (SimMsgRecv _ (MsgRT (RTTick _ _)))) -> False
   _         -> True
 
 compareOMsg :: (SimError -> IO ()) -> Tick -> Maybe String -> Handle -> IO ()
@@ -241,8 +242,8 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 
       logFilter    = case simLogging of
         LogAll            -> const True
-        LogAllNoUser      -> logAllNoUser @_ @_ @pid @ps
-        LogAllNoUserTicks -> logAllNoUserTicks @_ @_ @pid @ps
+        LogAllNoUser      -> logAllNoUser
+        LogAllNoUserTicks -> logAllNoUserTicks @_ @_ @_ @pid @ps
         LogNone           -> const False
 
   simLog <- case simLogging of
@@ -260,29 +261,33 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 
   simErrors <- newTVarIO []
 
-  let simClose = simIClose
-      simError e = atomically $ modifyTVar' simErrors $ \ee -> (: ee) $! e
-      simStatus = readTVarIO simErrors >$> \case
-        [] -> Right ()
-        x  -> Left (fromList (reverse x))
+  let
+    simClose = simIClose
+    simError e = atomically $ modifyTVar' simErrors $ \ee -> (: ee) $! e
+    simStatus = readTVarIO simErrors >$> \case
+      [] -> Right ()
+      x  -> Left (fromList (reverse x))
 
-      simRunI = do
-        i <- simI
-        whenJust (simIActWrite simIMsg) $ \h -> do
-          whenJust i $ hPutStrLn h . show
-        pure i
+    simRunI = do
+      i <- simI
+      whenJust (simIActWrite simIMsg) $ \h -> do
+        whenJust i $ hPutStrLn h . show
+      pure i
 
-      simRunO (t, o) = do
-        simLog (t, o)
+    simRunO (t, o) = do
+      simLog (t, o)
+      case o of
+        MsgAux _ -> pure () -- ignore MsgAux messages
 
-        let om = show (t, o)
-        case simOActWrite simOMsg of
-          Nothing -> case o of
-            MsgUser uo -> simUserO uo
-            _          -> pure ()
-          Just h -> hPutStrLn h om
+        _        -> do
+          let om = show (t, o)
+          case simOActWrite simOMsg of
+            Nothing -> case o of
+              MsgUser uo -> simUserO uo
+              _          -> pure ()
+            Just h -> hPutStrLn h om
 
-        whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
+          whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
 
   pure SimRT { .. }
   where SimOptions {..} = opt
@@ -312,7 +317,9 @@ runSimIO opt simUserIO initPids mkPState =
     let realNow = simNow iSimState
         mkRT    = defaultRT opt realNow simUserIO simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
-      (ostate, oSimState) <- runSimulation @_ @p rt (istate, iSimState)
+      (SimFullState ostate oSimState) <- runSimulation1 @_ @p
+        rt
+        (SimFullState istate iSimState)
 
       let t = simNow oSimState
       whenJust (simOActCompare simOMsg) $ compareOMsg simError t Nothing
