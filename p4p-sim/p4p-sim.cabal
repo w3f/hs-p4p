@@ -106,6 +106,7 @@ Executable sim
     , directory
     , op
     , optparse-applicative
+    , primitive
     , readline
     , unix
   HS-Source-Dirs: app

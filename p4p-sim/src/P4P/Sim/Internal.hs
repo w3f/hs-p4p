@@ -24,7 +24,7 @@ import           Control.Monad.Trans.State.Strict (StateT (..), execStateT,
 import           Control.Op
 import           Crypto.Random.Extra              (ChaChaDRGInsecure)
 import           Data.Bool                        (bool)
-import           Data.Foldable                    (for_, toList, traverse_)
+import           Data.Foldable                    (for_, toList)
 import           Data.List.NonEmpty               (NonEmpty (..))
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
@@ -51,10 +51,6 @@ int = fromIntegral
 proceedAll
   :: (Process p, Applicative m, Ctx p m) => Map pid (State p) -> m (Map pid p)
 proceedAll = traverse proceed
-
-replaceAll
-  :: (Process p, Applicative m, Ctx p m) => Map pid (p, State p) -> m ()
-replaceAll = traverse_ (uncurry replace)
 
 suspendAll
   :: (Process p, Applicative m, Ctx p m) => Map pid p -> m (Map pid (State p))

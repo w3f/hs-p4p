@@ -1,52 +1,52 @@
-{-# LANGUAGE RankNTypes   #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE PolyKinds           #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeFamilies        #-}
 
 module P4P.Proc.Instances
   ( Lens'
-  , SL(..)
+  , PRef(..)
   , MonadState(..)
-  , MV(..)
+  , PMut(..)
   , PrimMonad(..)
-  , newMutVar
+  , PrimOpGroup(..)
   )
 where
 
 -- external
-import           Control.Lens               (Lens', set, view)
+import           Control.Lens               (Lens', (%%=))
+import           Control.Lens.Mutable       (Allocable (..), AsLens (..),
+                                             IsoLST (..), MonadLST,
+                                             PrimOpGroup (..), S (..))
 import           Control.Monad.Primitive    (PrimMonad (..))
-import           Control.Monad.State.Strict (MonadState (..), get, modify,
-                                             state)
-import           Data.Primitive.MutVar
-import           Data.Tuple                 (swap)
+import           Control.Monad.State.Strict (MonadState (..), state)
 
 -- internal
 import           P4P.Proc.Internal
 
 
 --------------------------------------------------------------------------------
--- Process over an immutable state.
+-- Process over a pure reference.
 
-newtype SL st s = SL (Lens' st s)
+newtype PRef ref st s = PRef (ref s)
 
-instance Proc s => Process (SL st s) where
-  type State (SL st s) = s
-  type Ctx (SL st s) m = (MonadState st m)
-  proceed s = undefined -- FIXME: this requires a concept like MutableLensContext or something
-  replace (SL lens) = modify . set lens
-  suspend (SL lens) = view lens <$> get
-  reactM (SL lens) = state . lens . react
+instance (Allocable st s ref, Proc s) => Process (PRef ref st s) where
+  type State (PRef ref st s) = s
+  type Ctx (PRef ref st s) m = MonadState st m
+  runPure (PRef r) f = asLens r %%= f
+  proceed s = fmap PRef $ state $ alloc s
+  suspend (PRef r) = state $ free r
 
 --------------------------------------------------------------------------------
--- Process over a mutable state.
+-- Process over an impure reference.
 
--- TODO: generalise using PrimST from Control.Monad.Primitive.Extra
+newtype PMut ref p st s = PMut (ref s)
 
-newtype MV st s = MV (MutVar st s)
-
-instance Proc s => Process (MV st s) where
-  type State (MV st s) = s
-  type Ctx (MV st s) m = (PrimMonad m, PrimState m ~ st)
-  proceed = fmap MV <$> newMutVar
-  replace (MV mv) = writeMutVar mv
-  suspend (MV mv) = readMutVar mv
-  reactM (MV mv) = atomicModifyMutVar' mv . fmap swap . react
+instance (Allocable (S p st) s ref, Proc s) => Process (PMut ref p st s) where
+  type State (PMut ref p st s) = s
+  type Ctx (PMut ref p st s) m = MonadLST p st m
+  runPure (PMut r) f = stToM $ asLens @(S p st) r f
+  proceed s = fmap PMut $ stToM $ alloc @(S p st) s
+  suspend (PMut r) = stToM $ free @(S p st) r

@@ -95,6 +95,14 @@ class Protocol ps => Proc ps where
 -- files and logging output may be ignored) but should take into account as
 -- much as possible, at least all things relevant to a protocol - including any
 -- timeout-based behaviours, RNG internal secret states, etc.
+--
+-- A process that is completely pure in its implementation need not provide an
+-- instance of this class directly, but rather should provide an instance of
+-- 'Proc' and then use one of our generic instances for 'Process' listed below.
+-- OTOH a process that must "cheat" can implement this class directly, as long
+-- as it has deterministic behaviour. For example, if it wants to perform disk
+-- accesses directly for convenience during initial development, where the risk
+-- of failure is negligible. Note however that eventually this should be fixed.
 -}
 class Protocol (State p) => Process p where
   -- | Type of process state
@@ -102,11 +110,11 @@ class Protocol (State p) => Process p where
   -- | Constraint over execution environment type, e.g. 'Monad'.
   type Ctx p (m :: Type -> Type) :: Constraint
 
+  -- | Run a pure state-machine in the process.
+  runPure :: Ctx p m => p -> (State p -> (a, State p)) -> m a
+
   -- | Create a new process with the given state.
   proceed :: Ctx p m => State p -> m p
-
-  -- | Replace an existing process with the given state.
-  replace :: Ctx p m => p -> State p -> m ()
 
   -- | Destroy a process and return its state.
   --
@@ -126,18 +134,14 @@ class Protocol (State p) => Process p where
   reactM :: Ctx p m => p -> ProcMsgI p -> m [ProcMsgO p]
 
   default getAddrsM
-    :: (Ctx p m, Proc (State p), Functor m)
+    :: (Ctx p m, Proc (State p))
     => p -> m [ProcAddr p]
-  getAddrsM = fmap getAddrs . suspend
+  getAddrsM pt = runPure pt $ \s -> (getAddrs s, s)
 
   default reactM
-    :: (Ctx p m, Proc (State p), Monad m)
+    :: (Ctx p m, Proc (State p))
     => p -> ProcMsgI p -> m [ProcMsgO p]
-  reactM pt i = do
-    s <- suspend pt
-    let (o, s') = react i s
-    replace pt s'
-    pure o
+  reactM pt = runPure pt . react
 
 -- | Type alias for the address of a process.
 type ProcAddr p = PAddr (State p)

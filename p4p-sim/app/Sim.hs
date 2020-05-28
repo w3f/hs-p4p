@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE LambdaCase          #-}
@@ -14,10 +15,12 @@ import qualified Data.Set                  as S
 
 import           Control.Monad             (forever)
 import           Control.Op
+import           Data.Primitive.MutVar     (MutVar (..))
 import           Data.String               (IsString (..))
 import           Data.Word                 (Word64)
 import           P4P.Proc                  (Protocol (..))
-import           P4P.Proc.Instances        (MV (..), PrimMonad (..))
+import           P4P.Proc.Instances        (PMut (..), PrimMonad (..),
+                                            PrimOpGroup (..))
 
 -- external, kademlia
 import           Crypto.Random.Extra       (ChaChaDRGInsecure, seedFromWords)
@@ -99,7 +102,7 @@ setupReadlineHistory history = do
               (\s' -> addHistory s' >> hPutStrLn hist s' >> pure (Just s'))
 
 type Pid = Word64
-type MVP = MV (PrimState IO)
+type MVP = PMut (MutVar (PrimState IO)) 'OpST (PrimState IO)
 
 type SimC ps = (Sim Pid (MVP ps) IO, SimLog Pid ps, SimReRe Pid ps)
 

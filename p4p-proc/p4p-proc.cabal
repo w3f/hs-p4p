@@ -47,6 +47,7 @@ Library
       p4p-common
     , containers
     , lens
+    , mutable-lens (>= 0.3)
     , mtl
     , op
     , primitive
