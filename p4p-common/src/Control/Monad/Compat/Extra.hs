@@ -5,7 +5,7 @@
 {-# OPTIONS_GHC -Wno-error=orphans #-}
 
 -- | Various compatibility shims, should only be temporary.
-module Control.Monad.Compat where
+module Control.Monad.Compat.Extra where
 
 -- external
 import qualified Control.Monad.Trans.RWS.CPS    as CPSRWS (RWST, get, put,

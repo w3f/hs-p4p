@@ -23,7 +23,7 @@ import           Control.Lens                     (Iso', anon, at, contains,
 import           Control.Lens.Extra               ()
 import           Control.Lens.Mutable
 import           Control.Monad                    (void, when)
-import           Control.Monad.Compat             ()
+import           Control.Monad.Compat.Extra       ()
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT,
                                                    runState, state)

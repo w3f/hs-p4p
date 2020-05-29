@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, kademlia DHT protocol
 Description: Implementation of Kademlia DHT protocol and related.
 Category: Network, P2P, DHT
-Tested-With: GHC >= 8.8.3
+Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
@@ -28,10 +28,12 @@ Common generic
   Build-Depends: base >= 4 && < 5,
   GHC-Options:
     -Wall
+    -Wcompat
     -Wno-unused-matches
     -Wredundant-constraints
     -Wincomplete-record-updates
     -Wincomplete-uni-patterns
+    -Wunused-packages
   if flag(dev)
     GHC-Options:
       -Werror
@@ -68,8 +70,7 @@ Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-protocol-dht-kad
-    , doctest
+      doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: DocTests.hs
@@ -81,12 +82,9 @@ Test-Suite unit
       p4p-protocol-dht-kad
     , p4p-common
     , bytestring
-    , containers
     , transformers
     , tasty
-    , tasty-quickcheck
     , tasty-hunit
-    , checkers
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs

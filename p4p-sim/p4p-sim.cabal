@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, simulations
 Description: TODO
 Category: Network, P2P, Simulation
-Tested-With: GHC >= 8.8.3
+Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
@@ -28,10 +28,12 @@ Common generic
   Build-Depends: base >= 4 && < 5,
   GHC-Options:
     -Wall
+    -Wcompat
     -Wno-unused-matches
     -Wredundant-constraints
     -Wincomplete-record-updates
     -Wincomplete-uni-patterns
+    -Wunused-packages
   if flag(dev)
     GHC-Options:
       -Werror
@@ -73,8 +75,7 @@ Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-sim
-    , doctest
+      doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: DocTests.hs
@@ -83,11 +84,7 @@ Test-Suite unit
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-sim
-    , tasty
-    , tasty-quickcheck
-    , tasty-hunit
-    , checkers
+      tasty
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs

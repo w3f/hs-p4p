@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, pure process abstractions
 Description: TODO
 Category: Network, P2P, Process
-Tested-With: GHC >= 8.8.3
+Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
@@ -28,10 +28,12 @@ Common generic
   Build-Depends: base >= 4 && < 5,
   GHC-Options:
     -Wall
+    -Wcompat
     -Wno-unused-matches
     -Wredundant-constraints
     -Wincomplete-record-updates
     -Wincomplete-uni-patterns
+    -Wunused-packages
   if flag(dev)
     GHC-Options:
       -Werror
@@ -44,15 +46,12 @@ Common generic
 Library
   Import: generic
   Build-Depends:
-      p4p-common
-    , containers
-    , lens
+      lens
     , mutable-lens (>= 0.3)
     , mtl
     , op
     , primitive
     , schedule
-    , transformers
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Proc
@@ -65,8 +64,7 @@ Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-proc
-    , doctest
+      doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: DocTests.hs
@@ -75,11 +73,8 @@ Test-Suite unit
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-proc
-    , tasty
-    , tasty-quickcheck
+      tasty
     , tasty-hunit
-    , checkers
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs

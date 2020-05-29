@@ -5,13 +5,14 @@
 
 module Data.Type.Reflect where
 
+import           Data.Kind    (Type)
 import           GHC.Generics
 
 -- https://stackoverflow.com/a/48179707
 constrName :: (HasConstructor (Rep a), Generic a) => a -> String
 constrName = genericConstrName . from
 
-class HasConstructor (f :: * -> *) where
+class HasConstructor (f :: Type -> Type) where
   genericConstrName :: f x -> String
 
 instance HasConstructor f => HasConstructor (D1 c f) where

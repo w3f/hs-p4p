@@ -176,9 +176,6 @@ kRefreshBucket idx s0 = flip runStateWT s0 $ do
   nId   <- StateT $ kRefreshBucketOnly idx
   cmdId <- state newCmdId
   stateWT $ icmdStart (Command cmdId (LookupNode nId)) False
- where
-  State {..}   = s0
-  KParams {..} = kParams
 
 -- | Bump the bucket of the given nodeId, resetting its refresh time.
 -- This should be done whenever we send a GetNode or GetValue RPC to that node.
@@ -317,7 +314,7 @@ kInsertNode input oreqProc' = case input of
     _ -> doNothing
   P.MsgUser _        -> doNothing
   P.MsgProc Msg {..} -> case body of
-    Left Request {..} -> do
+    Left Request {} -> do
       insertNodeId Nothing False src srcAddr
     Right Reply {..} -> case oreqProc' of
       Nothing ->
@@ -325,7 +322,7 @@ kInsertNode input oreqProc' = case input of
         -- reply we don't want. the paper is silent on this matter. this could be
         -- spam or it could be that we simply timed out waiting for the request.
         doNothing
-      Just OReqProcess {..} -> do
+      Just OReqProcess {} -> do
         let isPong = case repBody of
               Right Pong -> True
               _          -> False
@@ -676,7 +673,6 @@ icmdOReqResult cmdId reqDst reqBody rep s0 = flip runStateWT s0 $ do
           stateWT $ icmdRunInput cmdId cmdProc (Just rep) cmdInput
  where
   State {..}   = s0
-  KParams {..} = kParams
 
 kHandleInput
   :: (Monad m, R.DRG' g)
@@ -775,7 +771,6 @@ kInput input s0 = flip runStateWT s0 $ do
       whenJust maybePing $ stateWT . kInput
  where
   State {..}   = s0
-  KParams {..} = kParams
 
 kInput'
   :: (R.DRG' g, Monad m) => KadI' -> StateT (State g) (WriterT [KadO] m) ()

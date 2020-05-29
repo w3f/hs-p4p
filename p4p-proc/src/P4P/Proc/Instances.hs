@@ -18,7 +18,7 @@ where
 -- external
 import           Control.Lens               (Lens', (%%=))
 import           Control.Lens.Mutable       (Allocable (..), AsLens (..),
-                                             IsoLST (..), MonadLST,
+                                             FromLST (..), MonadLST,
                                              PrimOpGroup (..), S (..))
 import           Control.Monad.Primitive    (PrimMonad (..))
 import           Control.Monad.State.Strict (MonadState (..), state)

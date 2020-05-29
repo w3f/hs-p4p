@@ -269,7 +269,6 @@ checkState State {..} = do
       checkTaskPending ("kRecvCmd/" <> show k) t           "TOICmdOReq"
       checkTaskPending ("kRecvCmd/" <> show k) icmdTimeout "TOICmd"
  where
-  KParams {..} = kParams
   checkTaskPending n t c = case SC.taskStatus t kSchedule of
     SC.TaskPending _ k -> checkConstrName n k c
     SC.TaskRunning _   -> checkConsistent "kSelfCheck" n c "SelfCheck"

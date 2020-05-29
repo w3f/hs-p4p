@@ -12,7 +12,7 @@ Bug-Reports: https://github.com/infinity0/hs-p4p/issues
 Synopsis: peer-for-peer library, empty example package
 Description: This package is a template for other P4P packages.
 Category: Network, P2P, Example
-Tested-With: GHC >= 8.8.3
+Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
@@ -28,10 +28,12 @@ Common generic
   Build-Depends: base >= 4 && < 5,
   GHC-Options:
     -Wall
+    -Wcompat
     -Wno-unused-matches
     -Wredundant-constraints
     -Wincomplete-record-updates
     -Wincomplete-uni-patterns
+    -Wunused-packages
   if flag(dev)
     GHC-Options:
       -Werror
@@ -52,8 +54,7 @@ Test-Suite doctests
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-zero
-    , doctest
+      doctest
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: DocTests.hs
@@ -62,11 +63,9 @@ Test-Suite unit
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      p4p-zero
-    , tasty
-    , tasty-quickcheck
-    , tasty-hunit
-    , checkers
+      tasty
+--    , tasty-quickcheck
+--    , tasty-hunit
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs
