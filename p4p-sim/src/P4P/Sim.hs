@@ -36,14 +36,10 @@ module P4P.Sim
   , handleSimResult
   , UserSimAsync(..)
   , newSimAsync
-  -- * External re-exports
-  , StateT(..)
-  , evalStateT
   )
 where
 
-import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
-import           Data.List.NonEmpty               (NonEmpty (..))
+import           Data.List.NonEmpty (NonEmpty (..))
 
 import           P4P.Sim.Internal
 import           P4P.Sim.IO

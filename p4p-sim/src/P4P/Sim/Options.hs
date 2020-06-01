@@ -1,13 +1,16 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE DeriveTraversable   #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeApplications    #-}
 
 module P4P.Sim.Options where
 
 -- external
+import           Control.Lens.TH.Extra          (makeLenses_)
 import           Control.Op
 import           Foreign.C.Types                (CInt)
 import           GHC.Generics                   (Generic)
@@ -29,6 +32,7 @@ helps strs = helpDoc $ Just $ extractChunk $ vsepChunks $ fmap paragraph strs
 
 data SimProto = ProtoEcho | ProtoKad
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
+makeLenses_ ''SimProto
 
 data SimLogging =
     LogNone
@@ -40,6 +44,7 @@ data SimLogging =
   | LogAll
     -- ^ Log everything, pretty spammy.
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
+makeLenses_ ''SimLogging
 
 loggerFromInt :: Int -> SimLogging
 loggerFromInt i | i > 2     = LogAll
@@ -62,6 +67,7 @@ data SimIAction p = SimIAction
     -- The path must not exist.
   }
   deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+makeLenses_ ''SimIAction
 
 data SimOAction p = SimOAction
   { simOActWrite   :: !(Maybe p)
@@ -74,6 +80,7 @@ data SimOAction p = SimOAction
     -- The path must exist already.
   }
   deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+makeLenses_ ''SimOAction
 
 data SimIOAction p = SimIOAction
   { simIState :: !(SimIAction p)
@@ -89,6 +96,7 @@ data SimIOAction p = SimIOAction
   , simOState :: !(SimOAction p)
   }
   deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+makeLenses_ ''SimIOAction
 
 actionOptions :: Parser (SimIOAction FilePath)
 actionOptions =
@@ -162,11 +170,15 @@ succString x =
               p  = if l' < l then replicate (l - l') '0' else []
           in  reverse s <> p <> d'
 
+-- TODO: cross-platform
+systemEmptyFile :: FilePath
+systemEmptyFile = "/dev/null"
+
 initMode :: (FilePath, FilePath, FilePath) -> SimIOAction FilePath
 initMode (s, i, x) =
   let s' = s <> ".s"
       is = SimIAction Nothing (Just s')
-      im = SimIAction (Just "/dev/null") Nothing -- TODO: cross-platform
+      im = SimIAction (Just systemEmptyFile) Nothing
       om = SimOAction Nothing Nothing
       os = SimOAction Nothing Nothing
   in  SimIOAction is im om os
@@ -202,6 +214,34 @@ rereMode (s, i, x) =
       om  = SimOAction (Just $ i'' <> y <> ".o") (Just $ i'' <> x <> ".o")
       os  = SimOAction (Just $ i'' <> y <> ".s") (Just $ i'' <> x <> ".s")
   in  SimIOAction is im om os
+
+{- | Convert a 'SimIOAction' representing 'initMode' into a delayed-init mode.
+
+If we're all of:
+
+  * not reading input state
+  * reading empty input messages
+  * not writing input messages, output messages, or output state
+
+then the converted action will instead write the output-state to the
+previously-specified input-state path, if any. This is useful for child
+simulations that might want to implement additional startup behaviour, such as
+constructing a network.
+
+The 'Bool' result represents whether the conversion was performed or not.
+-}
+delayedInitMode :: SimIOAction FilePath -> (Bool, SimIOAction FilePath)
+delayedInitMode = \case
+  SimIOAction { simIState = SimIAction Nothing p, simIMsg = SimIAction (Just e) Nothing, simOMsg = SimOAction Nothing omc, simOState = SimOAction Nothing osc }
+    | e == systemEmptyFile
+    -> ( True
+       , SimIOAction { simIState = SimIAction Nothing Nothing
+                     , simIMsg   = SimIAction Nothing Nothing
+                     , simOMsg   = SimOAction Nothing omc
+                     , simOState = SimOAction p osc
+                     }
+       )
+  a -> (False, a)
 
 -- TODO: ideally we'd group the option help text together but
 -- https://github.com/pcapriotti/optparse-applicative/issues/270
@@ -275,6 +315,7 @@ data SimOptions = SimOptions
   -- logging options
   }
   deriving (Eq, Ord, Show, Read, Generic)
+makeLenses_ ''SimOptions
 
 protoOptions :: Parser SimProto
 protoOptions =

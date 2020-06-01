@@ -48,10 +48,13 @@ Executable sim-kad
   GHC-Options: -threaded
   Build-Depends:
       p4p-sim
+    , p4p-proc
     , p4p-protocol-dht-kad
     , p4p-common
     , async
     , containers
+    , lens
     , stm
+    , transformers
   HS-Source-Dirs: app
   Main-Is: SimKad.hs

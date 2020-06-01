@@ -88,7 +88,7 @@ data SimRT pid ps m = SimRT
   , simStatus :: !(m (Either (NonEmpty SimError) ()))
   , simError  :: !(SimError -> m ())
   , simRunI   :: !(m (Maybe (SimI pid ps)))
-  , simRunO   :: !((Tick, SimO pid ps) -> m ())
+  , simRunO   :: !(Tick -> [SimO pid ps] -> m ())
   }
 
 -- TODO: SimT should be a newtype, so it doesn't clash with MonadState
@@ -130,7 +130,8 @@ simReact input = execWriterT $ do
       void $ M.traverseWithKey (runTick newNow) procs
       -- it's important that this is the last thing we do
       _2 . _simNow .= newNow
-      pure ()
+    MsgUser SimGetAllPids -> do
+      logU $ SimAllPids $ M.keysSet procs
     MsgUser (SimProcAdd pid sp) -> do
       -- insert process
       let SimProcState {..} = sp
@@ -143,7 +144,6 @@ simReact input = execWriterT $ do
           for_ spAddr $ \a -> do
             _2 . _simAddr . at a . nom . contains pid .= True
           logU $ SimProcAddResult pid True
-      pure ()
     MsgUser (SimProcDel pid) -> do
       -- delete process
       case M.lookup pid procs of
@@ -158,7 +158,6 @@ simReact input = execWriterT $ do
               else (S.empty, pids)
           let sp = SimProcState { .. }
           logU $ SimProcDelResult pid $ Just sp
-      pure ()
     MsgUser (SimProcUserI pid userI) -> do
       -- user message to a process
       case M.lookup pid procs of
@@ -166,7 +165,6 @@ simReact input = execWriterT $ do
           tell1 $ MsgAux $ SimProcEvent $ SimNoSuchPid (Left ()) pid
         Just _ -> do
           pushPMsgI realNow pid (MsgUser userI)
-      pure ()
  where
   -- pop a single inbox message up-to-and-including @realNow@
   popPMsgI :: Tick -> pid -> SimWT pid p m (Maybe (ProcMsgI p))
@@ -304,7 +302,7 @@ simulate simRT (PSim ppp) = void $ whileJustM $ do
     Nothing -> pure Nothing -- eof
     Just i  -> do
       outs <- reactM (PSim ppp) i
-      for_ outs $ lift . simRunO . (realNow, )
+      lift $ simRunO realNow outs
       pure (Just ())
   where SimRT {..} = simRT
 

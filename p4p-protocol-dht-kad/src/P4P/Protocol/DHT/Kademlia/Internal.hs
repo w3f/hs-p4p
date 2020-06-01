@@ -76,7 +76,7 @@ import           Data.List                         (sortOn)
 import           Data.Maybe                        (isNothing)
 import           Data.Tuple                        (swap)
 import           Data.Word                         (Word8)
---import           Debug.Trace                      (traceShowId, traceStack)
+--import           Debug.Pretty.Simple               (pTraceShowId)
 import           Safe                              (fromJustNote)
 
 -- internal
@@ -244,7 +244,7 @@ bEntriesInsert parK nodeId srcAddr tick isPong e0 = flip runState e0 $ do
       Nothing  -> (Nothing, Nothing)
  where
   nodeMatch      = (==) nodeId . nodeIdOf
-  newInfo        = newNodeLocalInfo nodeId
+  newInfo        = newNodeLocalInfo nodeId tick srcAddr
   updateNodeAddr = nodeUpdateAddr (fromIntegral parK) tick srcAddr
 
 insertNodeId
@@ -344,6 +344,7 @@ icmdStart cmd isExternal s0 = flip runStateWT s0 $ do
 -- | Initial lookup subject of a command
 cmdSubj :: NodeId -> CommandBody -> NodeId
 cmdSubj self = \case
+  GetNodeId         -> self
   JoinNetwork _     -> self
   LookupNode  nId   -> nId
   LookupValue key   -> key
@@ -352,6 +353,7 @@ cmdSubj self = \case
 -- | Lookup type of a command
 cmdOReq :: CommandBody -> NodeId -> RequestBody
 cmdOReq = \case
+  GetNodeId       -> error "unreachable"
   JoinNetwork _   -> GetNode
   LookupNode  _   -> GetNode
   LookupValue _   -> GetValue
@@ -477,17 +479,19 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
     -- before control hits this function, but perhaps we should assert that none
     -- of the below "Set.delete" are nops
 
-    (ICNewlyCreated, ICStart) -> do
-      case cmdBody of
-        -- "To join the network, a node u must have a contact to an
-        -- already participating node w. u inserts w into the appropriate
-        -- k-bucket. u then performs a node lookup for its own node ID."
-        JoinNetwork n -> stateWT $ insertNodes [n]
-        _             -> pure ()
-      -- start of request, populate from our own k-buckets
-      let key = cmdSubj (kSelf s0) $ cmdBody
-      nInfos <- kGetNodes key <$> get
-      continueLookup key $ newSimpleQuery (toNodeInfos' nInfos)
+    (ICNewlyCreated, ICStart) -> case cmdBody of
+      GetNodeId -> finishWithResult $ OwnNodeId $ kSelf s0
+      _         -> do
+        case cmdBody of
+          -- "To join the network, a node u must have a contact to an
+          -- already participating node w. u inserts w into the appropriate
+          -- k-bucket. u then performs a node lookup for its own node ID."
+          JoinNetwork n -> stateWT $ insertNodes [n]
+          _             -> pure ()
+        -- start of request, populate from our own k-buckets
+        let key = cmdSubj (kSelf s0) $ cmdBody
+        nInfos <- kGetNodes key <$> get
+        continueLookup key $ newSimpleQuery (toNodeInfos' nInfos)
 
     (ICLookingup key qs, ICReply repSrc (F.TimedOut ())) -> do
       continueLookup key $ qs { sqErr  = Set.insert repSrc (sqErr qs)
@@ -496,6 +500,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
 
     (ICLookingup key qs, ICReply repSrc (F.GotResult (ICGotNodes ni))) -> do
       stateWT $ insertNodes ni
+
       -- :^ not all of these will actually be kept in the k-buckets
       continueLookup key $ qs { sqAll  = niUnion (sqAll qs) (toNodeInfos' ni)
                               , sqOk   = M.insert repSrc () (sqOk qs)
@@ -557,6 +562,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
           stateWT $ icmdOReqRequest cmdId nInfo reqBody
         pure Nothing
       Right res -> cancelExistingOReqs >> case cmdBody of
+        GetNodeId         -> error "unreachable"
         JoinNetwork nInfo -> do
           -- "Finally, u refreshes all k-buckets further away than its
           -- closest neighbor."

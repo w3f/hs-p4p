@@ -56,6 +56,7 @@ Library
     , schedule
     , transformers
     , vector
+--    , pretty-simple
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Protocol.DHT.Kademlia

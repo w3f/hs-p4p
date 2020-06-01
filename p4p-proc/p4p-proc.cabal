@@ -52,6 +52,8 @@ Library
     , op
     , primitive
     , schedule
+    -- P4P.Proc.Util.FlowControl
+    , containers
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Proc

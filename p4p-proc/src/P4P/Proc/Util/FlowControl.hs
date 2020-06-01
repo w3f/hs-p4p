@@ -48,10 +48,17 @@ enforced (e.g. because part of its state is growing too big), it will need to
 give explicit signals to the impure code to do this, rather than merely relying
 on the implicit signal of "an input was processed".
 
-Note that this module currently does not have any special utilies to handle
+Note: this module currently does not have any special utilies to handle
 receiving flow control; but this might change in future.
+
+Note: this module's utilities are also useful for intraprocess flow control,
+e.g. for cyclic data flows between threads.
 -}
 module P4P.Proc.Util.FlowControl where
+
+-- external
+import           Data.Sequence as Seq
+
 
 {- | Flow control structures for a given recipient.
 
@@ -88,9 +95,9 @@ maybeSend push maybePop msg (w0, q0) = if w0
 If the queue is non-empty, pop a message and send it. Otherwise, mark the
 recipient as "waiting".
 
-@Left ()@ means that the receiver was already marked as ready. This usually
-means some incorrect logic in the calling code, probably that it did not
-actually send a message after the previous 'receiverReady'.
+@Left ()@ means that the receiver was already marked as ready. This means that
+the caller did not actually send a message after the previous 'receiverReady'.
+This may or may not be a bug, depending on your other guarantees.
 -}
 receiverReady
   :: (queue -> (Maybe msg, queue))
@@ -131,3 +138,12 @@ receiverReadyQ
   -> (Either () (Maybe (FCMsg q)), FlowControl q)
 receiverReadyQ = receiverReady maybePopQ
 {-# INLINE receiverReadyQ #-}
+
+instance FlowControlQueue (Seq a) where
+  type FCMsg (Seq a) = a
+
+  maybePopQ q = case q of
+    Seq.Empty -> (Nothing, q)
+    h :<| tl  -> (Just h, tl)
+
+  pushQ el q = q |> el

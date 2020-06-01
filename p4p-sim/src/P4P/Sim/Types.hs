@@ -55,6 +55,7 @@ data SimProcState ps i a = SimProcState
 -- | User input into the sim. TODO: will be extended with debugging commands.
 data SimUserI' pid ps ui i a =
     SimProcUserI !pid !ui
+  | SimGetAllPids
   | SimProcAdd !pid !(SimProcState ps i a)
   | SimProcDel !pid
  deriving (Eq, Ord, Show, Read, Generic)
@@ -64,6 +65,7 @@ type SimUserI pid ps = SimUserI' pid ps (UserI ps) (GMsgI ps) (PAddr ps)
 -- | User output from the sim. TODO: will be extended with debugging output.
 data SimUserO' pid ps uo i a =
     SimProcUserO !pid !uo
+  | SimAllPids !(Set pid)
   | SimProcAddResult !pid !Bool
   | SimProcDelResult !pid !(Maybe (SimProcState ps i a))
  deriving (Eq, Ord, Show, Read, Generic)

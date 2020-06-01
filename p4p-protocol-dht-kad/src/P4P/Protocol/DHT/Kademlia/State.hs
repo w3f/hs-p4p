@@ -42,7 +42,9 @@ import           Data.Functor.Identity             (runIdentity)
 import           Data.Traversable                  (for)
 import           Data.Tuple.Extra                  (dupe)
 import           Data.Word                         (Word16, Word8)
+--import           Debug.Pretty.Simple               (pTraceShowId)
 import           GHC.Generics                      (Generic)
+import           Safe.Foldable                     (maximumBound)
 
 -- internal
 import           P4P.Protocol.DHT.Kademlia.Command
@@ -145,9 +147,12 @@ newtype NodeLocalInfo = NodeLocalInfo {
 makeLenses_ ''NodeLocalInfo
 makeWrapped ''NodeLocalInfo
 
-newNodeLocalInfo :: NodeId -> NodeLocalInfo
-newNodeLocalInfo nodeId =
-  NodeLocalInfo NodeInfo { niNodeId = nodeId, niNodeAddr = mempty }
+newNodeLocalInfo
+  :: NodeId -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo
+newNodeLocalInfo nodeId seen nodeAddr = NodeLocalInfo NodeInfo
+  { niNodeId   = nodeId
+  , niNodeAddr = pure (seen, nodeAddr)
+  }
 
 nodeIdOf :: NodeLocalInfo -> NodeId
 nodeIdOf (NodeLocalInfo NodeInfo {..}) = niNodeId
@@ -157,7 +162,7 @@ nodeInfoOf (NodeLocalInfo nInfo) = fmap snd nInfo
 
 nodeLastSeen :: NodeLocalInfo -> (SC.Tick, NodeId)
 nodeLastSeen (NodeLocalInfo NodeInfo {..}) =
-  (either id id $ maximum $ fst <$> niNodeAddr, niNodeId)
+  (either id id $ maximumBound (Left 0) (fst <$> niNodeAddr), niNodeId)
 
 instance Ord NodeLocalInfo where
   compare = compare `on` nodeLastSeen
@@ -265,7 +270,7 @@ checkState State {..} = do
     checkTaskPending ("kStore/" <> show k) sRepub  "RepublishKey"
     checkTaskPending ("kStore/" <> show k) sExpire "ExpireKey"
   checkBounded "kSentReq" kSentReq getSentReqIdx $ \prefix v -> do
-    checkTaskPending prefix (retryTask $ oreqRetry v) "TOReply"
+    checkTaskPending prefix (retryTask $ oreqRetry v) "TOOReqReply"
     checkTaskPending prefix (oreqTimeout v)           "TOOReq"
   checkBounded "kRecvReq" kRecvReq getRecvReqIdx $ \prefix v -> do
     checkTaskPending prefix (ireqTimeout v) "TOIReq"

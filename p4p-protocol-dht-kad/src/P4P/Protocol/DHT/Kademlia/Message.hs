@@ -142,7 +142,8 @@ data Command = Command
   deriving (Show, Read, Generic, Eq, Ord)
 
 data CommandBody =
-    JoinNetwork !(NodeInfo NodeAddr)
+    GetNodeId
+  | JoinNetwork !(NodeInfo NodeAddr)
   | LookupNode !NodeId
   | LookupValue  !Key
   | InsertValue !Key !Value
@@ -156,6 +157,7 @@ data CommandReply = CommandReply
 
 data CommandReplyBody =
     CommandTimedOut !SC.TickDelta
+  | OwnNodeId !NodeId
   | JoinNetworkReply !NodeInfos
   | LookupNodeReply !NodeInfos
   | LookupValueReply !(Either NodeInfos Value)

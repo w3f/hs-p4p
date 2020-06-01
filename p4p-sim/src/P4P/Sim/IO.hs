@@ -19,10 +19,10 @@ import           Control.Monad                  (forever, join, void, when)
 import           Control.Monad.Extra            (whenJust)
 import           Control.Op
 import           Data.Either                    (fromRight, lefts)
-import           Data.Foldable                  (for_, toList)
+import           Data.Foldable                  (for_, toList, traverse_)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
-import           Data.Maybe                     (fromMaybe)
+import           Data.Maybe                     (fromMaybe, mapMaybe)
 import           Data.Schedule                  (Tick)
 import           Data.Traversable               (for)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
@@ -36,7 +36,7 @@ import           Control.Clock.IO               (Intv (..), interval, newClock)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
                                                  wait)
 import           Control.Concurrent.Async.Extra (foreverInterleave)
-import           Control.Concurrent.STM         (atomically)
+import           Control.Concurrent.STM         (STM, atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
 import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
@@ -151,13 +151,15 @@ type SimReRe pid ps
     )
 
 type SimUserIO pid ps
-  = (IO (Maybe (SimUserI pid ps)), SimUserO pid ps -> IO ())
+  = (IO (Maybe (SimUserI pid ps)), [SimUserO pid ps] -> IO ())
 type UserSimIO pid ps
-  = (Maybe (SimUserI pid ps) -> IO (), IO (SimUserO pid ps))
+  = (Maybe (SimUserI pid ps) -> IO (), IO [SimUserO pid ps])
+type UserSimSTM pid ps
+  = (Maybe (SimUserI pid ps) -> STM (), STM [SimUserO pid ps])
 
 data UserSimAsync pid ps = UserSimAsync
   { simWI         :: !(Maybe (SimUserI pid ps) -> IO ())
-  , simRO         :: !(IO (SimUserO pid ps))
+  , simRO         :: !(IO [SimUserO pid ps])
   , simCancel     :: !(IO ())
   , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
   }
@@ -177,7 +179,7 @@ defaultSimUserIO getInput =
       o = \case
         SimProcUserO pid uo -> print $ pid :~ uo
         x                   -> print x
-  in  (i, o)
+  in  (i, traverse_ o)
 
 -- | SimUserIO that reads/writes from TBQueues.
 tbQueueSimUserIO :: IO (UserSimIO pid ps, SimUserIO pid ps)
@@ -187,6 +189,17 @@ tbQueueSimUserIO = do
   let ri = atomically $ readTBQueue qi
       ro = atomically $ readTBQueue qo
       wi = atomically . writeTBQueue qi
+      wo = atomically . writeTBQueue qo
+  pure ((wi, ro), (ri, wo))
+
+-- | SimUserIO that reads/writes from TBQueues.
+tbQueueSimUserIO' :: IO (UserSimSTM pid ps, SimUserIO pid ps)
+tbQueueSimUserIO' = do
+  qi <- newTBQueueIO 1
+  qo <- newTBQueueIO 1
+  let ri = atomically $ readTBQueue qi
+      ro = readTBQueue qo
+      wi = writeTBQueue qi
       wo = atomically . writeTBQueue qo
   pure ((wi, ro), (ri, wo))
 
@@ -231,9 +244,10 @@ defaultSimLog
   => (SimO pid ps -> Bool)
   -> String
   -> Handle
-  -> (Tick, SimO pid ps)
+  -> Tick
+  -> SimO pid ps
   -> IO ()
-defaultSimLog f tFmt h (t, evt) = when (f evt) $ do
+defaultSimLog f tFmt h t evt = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
   hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
 
@@ -275,7 +289,7 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
         LogNone           -> const False
 
   simLog <- case simLogging of
-    LogNone -> pure (\_ -> pure ())
+    LogNone -> pure (\_ _ -> pure ())
     _ ->
       mkHandle simLogOutput >$> defaultSimLog @pid @ps logFilter simLogTimeFmt
 
@@ -302,20 +316,28 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
         whenJust i $ hPutStrLn h . show
       pure i
 
-    simRunO (t, o) = do
-      simLog (t, o)
-      case o of
-        MsgAux _ -> pure () -- ignore MsgAux messages
+    ignoreAux = \case
+      MsgAux _ -> False
+      _        -> True
 
-        _        -> do
-          let om = show (t, o)
-          case simOActWrite simOMsg of
-            Nothing -> case o of
-              MsgUser uo -> simUserO uo
-              _          -> pure ()
-            Just h -> hPutStrLn h om
+    onlyUser = \case
+      MsgUser uo -> Just uo
+      _          -> Nothing
 
-          whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
+    simRunO t outs = do
+      for_ outs $ simLog t
+
+      for_ (filter ignoreAux outs) $ \o -> do
+        let om = show (t, o)
+        whenJust (simOActWrite simOMsg) $ flip hPutStrLn om
+        whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
+
+      -- send all the outs to simUserO in one batch
+      -- this allows it to perform flow control more pro-actively, since it now
+      -- receives a signal when 'reactM' outputs []
+      case simOActWrite simOMsg of
+        Nothing -> simUserO $ mapMaybe onlyUser outs
+        Just _  -> pure ()
 
   pure SimRT { .. }
   where SimOptions {..} = opt
@@ -382,7 +404,7 @@ newSimAsync maybeEat runSimIO' = do
   simCancel <- case maybeEat of
     Nothing  -> pure (cancel aMain)
     Just eat -> do
-      aRead <- async $ forever $ simRO >>= eat
+      aRead <- async $ forever $ simRO >>= traverse_ eat
       link aRead
       link2 aMain aRead
       pure (cancel aMain >> cancel aRead)
