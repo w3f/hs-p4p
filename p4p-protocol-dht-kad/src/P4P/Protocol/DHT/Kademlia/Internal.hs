@@ -266,6 +266,8 @@ insertNodeId rTick isPong nodeId srcAddr s0 = flip runStateWT s0 $ do
     else do
       nodeToPing <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
         bEntriesInsert parK nodeId srcAddr tick isPong
+      -- TODO: more sophistication with this behaviour:
+      -- track the oreqRequest, cancel it if the node gets evicted in the meantime
       whenJust (join nodeToPing) $ \nInfo -> do
         stateWT $ oreqRequest (nodeInfoOf nInfo) Ping
  where
@@ -788,4 +790,5 @@ instance P.Protocol (State g) where
 
 instance R.DRG' g => P.Proc (State g) where
   getAddrs s = toList $ niNodeAddr $ ownNodeInfo s
+  localNow s = SC.tickNow $ kSchedule s
   react i s = runIdentity (runStateWT (kInput' i) s)

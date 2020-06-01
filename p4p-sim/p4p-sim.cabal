@@ -57,6 +57,7 @@ Library
     , lens
     , mutable-lens
     , optparse-applicative
+    , pretty-simple
     , safe
     , schedule
     , stm
@@ -69,6 +70,7 @@ Library
   Exposed-Modules:
     P4P.Sim
     P4P.Sim.EchoProcess
+    P4P.Sim.Extension
     P4P.Sim.Internal
     P4P.Sim.IO
     P4P.Sim.Options

@@ -96,7 +96,8 @@ withSProt prot a = case prot of
   SEcho -> a
   SKad  -> a
 
-type SimC ps = (Sim Pid (PMut' ps) IO, SimLog Pid ps, SimReRe Pid ps, Proc ps)
+type SimC ps
+  = (SimProcess Pid (PMut' ps), SimLog Pid ps (), SimReRe Pid ps (), Proc ps)
 
 withSimProto
   :: SimOptions
@@ -124,16 +125,18 @@ runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
         Nothing -> hPutStrLn stderr "" >> pure Nothing
         Just s  -> maybeAddHistory s >> pure (Just s)
   let initPids  = mkInitPids opt
-  let simUserIO = defaultSimUserIO @_ @ps getInput
+  let simUserIO = defaultSimUserIO @_ @ps @() getInput
   runSimIO @_ @(PMut' ps) opt initPids mkPS simUserIO >>= handleSimResult
   where SimOptions {..} = opt
 
+newtype UserSimAsync' pid ps = UserSimAsync' (UserSimAsync pid ps ())
+
 -- run via tb-queues, can be loaded from GHCI
-runTB :: SimOptions -> IO (DSum SProt (UserSimAsync Pid))
+runTB :: SimOptions -> IO (DSum SProt (UserSimAsync' Pid))
 runTB opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
   let runSimIO' = runSimIO @_ @(PMut' ps) opt (mkInitPids opt) mkPS
   handles <- newSimAsync @_ @(PMut' ps) (Just print) runSimIO'
-  pure $ p :=> handles
+  pure $ p :=> UserSimAsync' handles
 
 main :: IO ()
 main =

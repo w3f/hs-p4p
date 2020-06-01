@@ -31,11 +31,12 @@ class DRG gen => DRG' gen where
   seedLength :: Int
 
 initializeFrom
-  :: forall gen seed f
-   . (DRG' gen, ByteArray seed, Functor f)
-  => (Int -> f seed)
+  :: forall gen f
+   . (DRG' gen, Functor f)
+  => (forall seed . ByteArray seed => Int -> f seed)
   -> f gen
-initializeFrom getEntropy = initialize <$> getEntropy (seedLength @gen)
+initializeFrom getEntropy =
+  initialize <$> getEntropy @ScrubbedBytes (seedLength @gen)
 
 
 -- | ChaCha Deterministic Random Generator

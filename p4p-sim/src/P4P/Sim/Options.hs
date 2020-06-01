@@ -300,19 +300,22 @@ allActionOptions =
         )
 
 data SimOptions = SimOptions
-  { simProto       :: !SimProto
-  -- protocol selector
+  { simProto        :: !SimProto
+  -- :^ protocol selector
   -- this is the only thing that needs to be given in replay mode
-  , simInitNodes   :: !Int
-  , simInitLatency :: !SimLatency
-  , simMsTick      :: !Integer
-  -- execution config, ignored during replay
-  , simIOAction    :: !(SimIOAction FilePath)
-  -- IO options, inc. record/replay
-  , simLogging     :: !SimLogging
-  , simLogOutput   :: !(Either CInt FilePath)
-  , simLogTimeFmt  :: !String
-  -- logging options
+  , simInitNodes    :: !Int
+  , simInitLatency  :: !SimLatency
+  , simMsTick       :: !Integer
+  -- :^ initial execution config, ignored during replay since it is read
+  , simIOAction     :: !(SimIOAction FilePath)
+  -- :^ IO options, inc. record/replay
+  , simLogging      :: !SimLogging
+  , simLogOutput    :: !(Either CInt FilePath)
+  , simLogTimeFmt   :: !String
+  -- :^ logging options
+  , simDbgPprState  :: !Bool -- TODO: integrate with logging, and ppr messages
+  , simDbgEmptySimX :: !Bool
+  -- :^ debugging options
   }
   deriving (Eq, Ord, Show, Read, Generic)
 makeLenses_ ''SimOptions
@@ -403,6 +406,16 @@ simOptions proto =
         <> metavar "FMT"
         <> help "Logging timestamp format-string."
         <> value "%Y-%m-%d %H:%M:%S.%3q %z"
+        <> showDefault
+        )
+    <*> (  switch
+        <| long "dbg-ppr-state"
+        <> help "Pretty-print the state before and after execution"
+        <> showDefault
+        )
+    <*> (  switch
+        <| long "dbg-empty-sim-x"
+        <> help "For testing p4p-sim itself: use an empty extension"
         <> showDefault
         )
 

@@ -39,6 +39,7 @@ instance Protocol EchoState where
 
 instance Proc EchoState where
   getAddrs = addrs
+  localNow _ = 0
   react i s = case i of
     MsgRT   _   -> ([], s)
     MsgUser u   -> ([MsgUser u], s) -- echo reply back

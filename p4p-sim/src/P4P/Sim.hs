@@ -17,11 +17,15 @@ module P4P.Sim
   , newSimState
   , SimRT(..)
   , SimT
-  , Sim
+  , SimProcess
   , proceedAll
   , suspendAll
   , simulate
-  , runSimulation
+  , runSim
+  -- * Extensions
+  , SimXProtocol(..)
+  , runSimX
+  , runSimXS
   -- * Options
   , SimOptions(..)
   , parseArgsIO
@@ -32,6 +36,7 @@ module P4P.Sim
   , SimLog
   , SimReRe
   , defaultSimUserIO
+  , grunSimIO
   , runSimIO
   , handleSimResult
   , UserSimAsync(..)
@@ -41,6 +46,7 @@ where
 
 import           Data.List.NonEmpty (NonEmpty (..))
 
+import           P4P.Sim.Extension
 import           P4P.Sim.Internal
 import           P4P.Sim.IO
 import           P4P.Sim.Options

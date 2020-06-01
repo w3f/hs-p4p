@@ -49,6 +49,7 @@ Library
       extra
     , lens
     , mutable-lens
+    , singletons
     , template-haskell
     -- Crypto.*
     , bytestring
@@ -67,9 +68,12 @@ Library
   Exposed-Modules:
     Control.Concurrent.Async.Extra
     Control.Lens.Extra
+    Control.Lens.Mutable.Extra
     Control.Lens.TH.Extra
     Control.Monad.Compat.Extra
+    Control.Monad.Trans.Extra
     Control.Monad.Trans.Except.Extra
+    Control.Monad.Trans.Writer.Extra
     Crypto.Cipher.ChaCha.Extra
     Crypto.Random.Extra
     Data.Map.Bounded

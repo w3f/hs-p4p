@@ -13,7 +13,6 @@ import           Control.Lens.At            (Index, IxValue, Ixed (..))
 import           Control.Lens.Indexed       (FoldableWithIndex (..),
                                              FunctorWithIndex (..),
                                              TraversableWithIndex (..))
-import           Control.Lens.Mutable       (Allocable (..), AsLens (..))
 import           Control.Lens.Unsound       (lensProduct)
 import           Control.Monad.State.Strict (MonadState, get)
 import           Data.Functor               ((<&>))
@@ -106,15 +105,3 @@ instance (Ord k1, Ord k2) => Ixed (BMap2 k1 k2 a) where
 instance (Ord k1, Ord k2) => At_ (BMap2 k1 k2 a) where
   at_ k f = BM.alterF2 f k
   {-# INLINE at_ #-}
-
-instance AsLens (Maybe a) a (Const ()) where
-  asLens _ f (Just x) = Just <$> f x
-  asLens _ f Nothing  = error "uninitialised-access"
-
-instance Allocable (Maybe a) a (Const ()) where
-  alloc _ (Just x) = (error "out-of-memory", Just x)
-  alloc x Nothing  = (Const (), Just x)
-  isValid (Const ()) (Just x) = (True, Just x)
-  isValid (Const ()) Nothing  = (False, Nothing)
-  free (Const ()) (Just x) = (x, Nothing)
-  free (Const ()) Nothing  = (error "double-free", Nothing)

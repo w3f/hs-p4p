@@ -1,45 +1,50 @@
-{-# LANGUAGE DeriveGeneric       #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeApplications    #-}
-{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE TypeApplications      #-}
+{-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE UndecidableInstances  #-}
 
 -- external
-import qualified Data.Map.Strict                as M
-import qualified Data.Sequence.Extra            as Seq
-import qualified Data.Set                       as S
+import qualified Data.Map.Strict                  as M
+import qualified Data.Sequence.Extra              as Seq
+import qualified Data.Set                         as S
 
-import           Control.Applicative            ((<|>))
-import           Control.Concurrent.Async       (async)
-import           Control.Concurrent.STM         (atomically)
-import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
-                                                 writeTBQueue)
-import           Control.Lens                   ((%%=), (%%~), (%=), (&), (.=))
-import           Control.Lens.TH.Extra          (makeLenses_)
-import           Control.Monad                  (forever, unless, when)
-import           Control.Monad.Trans.Class      (MonadTrans (..))
-import           Control.Monad.Trans.State      (StateT (..), get)
-import           Data.Either                    (isLeft)
-import           Data.Foldable                  (for_)
-import           Data.Map.Strict                (Map)
-import           Data.Maybe                     (fromJust)
-import           Data.Sequence                  (Seq)
-import           GHC.Generics                   (Generic)
-import           System.Environment             (getArgs)
-import           System.Exit                    (exitWith)
-import           System.IO                      (stdin)
+import           Control.Lens                     ((%%=), (%%~), (&), (.=))
+import           Control.Lens.TH.Extra            (makeLenses_)
+import           Control.Monad                    (when)
+import           Control.Monad.Trans.Class        (MonadTrans (..))
+import           Control.Monad.Trans.State        (StateT (..), get, runState)
+import           Control.Monad.Trans.Writer.CPS   (WriterT, execWriterT)
+import           Control.Monad.Trans.Writer.Extra (tell1)
+import           Crypto.Random.Extra              (initializeFrom,
+                                                   randomBytesGenerate)
+import           Data.Foldable                    (for_)
+import           Data.Map.Strict                  (Map)
+import           Data.Maybe                       (fromJust)
+import           GHC.Generics                     (Generic)
+
+-- external, impure
+import           Control.Concurrent.Async         (race)
+import           Control.Concurrent.STM           (atomically)
+import           Control.Concurrent.STM.TBQueue   (newTBQueueIO, readTBQueue,
+                                                   writeTBQueue)
+import           Control.Concurrent.STM.TVar      (newTVarIO, readTVarIO,
+                                                   writeTVar)
+import           System.Environment               (getArgs)
+import           System.Exit                      (exitWith)
 
 -- external, p4p
-import           P4P.Proc.Util.FlowControl
+import           P4P.Proc
 import           P4P.Protocol.DHT.Kademlia
 import           P4P.Sim
-import           P4P.Sim.IO                     (combineSimUserIO,
-                                                 hGetLineOrEOF,
-                                                 tbQueueSimUserIO')
+import           P4P.Sim.IO                       (defaultGetInput)
 import           P4P.Sim.Options
-import           P4P.Sim.Util                   (ChaChaDRGInsecure, PMut', Pid,
-                                                 getEntropy, mkInitPids)
+import           P4P.Sim.Util                     (ChaChaDRGInsecure, PMut',
+                                                   Pid, getEntropy, mkInitPids)
 
 
 type KS = KState ChaChaDRGInsecure
@@ -55,38 +60,64 @@ mkPState opt p = do
   newRandomState @ChaChaDRGInsecure getEntropy [addr] params
 
 data KSimState = KSimState
-  { ksQueue   :: !(Seq (Maybe (SimUserI Pid KS)))
+  { ksDRG     :: !ChaChaDRGInsecure
     -- ^ output queue, for flow control
   , ksJoining :: !(Maybe (Either (Map Pid (Maybe NodeId)) (Map Pid NodeId)))
   }
   deriving (Show, Read, Generic, Eq)
 makeLenses_ ''KSimState
 
-data KSimIn = KSimJoinAll
+data KSimI = KSimJoinAll
   deriving (Show, Read, Generic, Eq, Ord)
-makeLenses_ ''KSimIn
+makeLenses_ ''KSimI
 
-sendCommand :: Pid -> CommandBody -> StateT KSimState IO ()
+data KSimO = KSimJoinStarted | KSimJoinFinished
+  deriving (Show, Read, Generic, Eq, Ord)
+makeLenses_ ''KSimO
+
+instance Protocol KSimState where
+  type PMsg KSimState = Void
+  type UserI KSimState = Either (SimUserO Pid KS) KSimI
+  type UserO KSimState = Either (SimUserI Pid KS) KSimO
+  type AuxO KSimState = Void
+
+instance SimXProtocol Pid KS KSimState where
+  type XUserI KSimState = KSimI
+  type XUserO KSimState = KSimO
+
+instance Proc KSimState where
+  getAddrs = const []
+  localNow = const 0
+  react i = runState $ case i of
+    MsgUser ui -> (MsgUser <$>) <$> kSim ui
+    _          -> pure []
+
+sendCommand
+  :: Monad m
+  => Pid
+  -> CommandBody
+  -> WriterT [Either (SimUserI Pid KS) KSimO] (StateT KSimState m) ()
 sendCommand pid cmd = do
-  cId <- lift $ getEntropy 32 -- FIXME: where should this magic number go?
-  _ksQueue %= pushQ (Just $ SimProcUserI pid $ Command cId cmd)
+  cId <- _ksDRG %%= randomBytesGenerate 32 -- FIXME: move this magic number into kad package
+  tell1 $ Left $ SimProcUserI pid $ Command cId cmd
 
--- TODO: this doesn't interact with replay very well - once we suspend and
--- resume, KSimState is lost...
-kSim :: Bool -> Either KSimIn (SimUserO Pid KS) -> StateT KSimState IO ()
-kSim autoQuit input = do
-  ks <- get
-  case (ks, input) of
-    (KSimState _ Nothing, Left KSimJoinAll) -> do
+kSim
+  :: Monad m
+  => Either (SimUserO Pid KS) KSimI
+  -> StateT KSimState m [Either (SimUserI Pid KS) KSimO]
+kSim input = execWriterT $ do
+  ks <- lift get
+  case (ksJoining ks, input) of
+    (Nothing, Right KSimJoinAll) -> do
       -- get all pids
-      _ksQueue %= pushQ (Just $ SimGetAllPids)
+      tell1 $ Left SimGetAllPids
       _ksJoining .= Just (Left mempty)
-    (KSimState _ (Just (Left ns)), Right (SimAllPids pids)) | null ns -> do
+    (Just (Left ns), Left (SimAllPids pids)) | null ns -> do
       -- get all node ids
       for_ pids $ \pid -> do
-        sendCommand pid $ GetNodeId
+        sendCommand pid GetNodeId
       _ksJoining .= Just (Left (M.fromSet (const Nothing) pids))
-    (KSimState _ (Just (Left ns)), Right (SimProcUserO pid (CommandReply _ (Right (OwnNodeId nId)))))
+    (Just (Left ns), Left (SimProcUserO pid (CommandReply _ (Right (OwnNodeId nId)))))
       | M.member pid ns
       -> do
       -- receive node ids
@@ -101,8 +132,9 @@ kSim autoQuit input = do
               let nId' = fromJust $ M.lookup i nIds
               sendCommand j $ do
                 JoinNetwork (NodeInfo nId' (Seq.bFromList [mkAddr i]))
-            when autoQuit $ do
-              _ksQueue %= pushQ Nothing -- EOF signal to sim
+            tell1 $ Right KSimJoinStarted
+            -- TODO: check we get the right number of replies later, and output
+            -- KSimJoinFinished
             pure (Right nIds)
         _ksJoining .= Just r
     _ -> pure ()
@@ -112,12 +144,7 @@ main :: IO ()
 main = do
   let parser =
         parserInfo "sim-kad" "kademlia test" (simOptions (pure ProtoKad))
-  opt                      <- parseArgsIO parser =<< getArgs
-  ((tbWI, tbRO), tbUserIO) <- tbQueueSimUserIO' @_ @KS
-  -- TODO: intercept user commands that parse into KSimIn and run them
-  (simUserIO   , close   ) <- combineSimUserIO
-    [tbUserIO, defaultSimUserIO @Pid (hGetLineOrEOF stdin)]
-  simCtl <- newTBQueueIO 1
+  opt <- parseArgsIO parser =<< getArgs
 
   -- auto-join if we're
   --   - not reading input state
@@ -130,22 +157,34 @@ main = do
   -- specified input-state-file (if any), then quit
   let (autoQuit, opt') = opt & _simIOAction %%~ delayedInitMode
 
-  ar <- async $ flip runStateT (KSimState mempty Nothing) $ forever $ do
-    inputs <-
-      lift
-      $   atomically
-      $   fmap (pure . Left) (readTBQueue simCtl)
-      <|> fmap (fmap Right)  tbRO
-    --lift $ print inputs
-    for_ inputs $ kSim autoQuit
-    -- if we got an output from the sim (i.e. own input /= [Left _])
-    -- then flow control can unblock, i.e. we can now send the sim one input
-    unless (any isLeft inputs) $ do
-      _ksQueue %%= maybePopQ >>= \case
-        Just out -> lift $ atomically $ tbWI out
-        Nothing  -> pure ()
-  aw <- async $ when autoJoin $ do
-    atomically $ writeTBQueue simCtl KSimJoinAll
+  drg <- initializeFrom getEntropy
+  let initXState = KSimState drg Nothing
+
+  let (ui, uo)   = defaultSimUserIO @_ @KS @KSimState defaultGetInput
+  simUserIO <- if not autoJoin && not autoQuit
+    then pure (ui, uo)
+    else do
+      -- by design principle, processes are meant to be suspended at any time,
+      -- and so they have no explicit awareness of when they are started or
+      -- stopped. so we have this slight hack to support autoJoin/autoQuit
+      started  <- newTVarIO False
+      finished <- newTBQueueIO 1
+      let ui' = readTVarIO started >>= \case
+            False -> do
+              atomically $ writeTVar started True
+              pure (Just (SimExtensionI KSimJoinAll))
+            True -> fmap (either id id) $ race ui $ do
+              atomically (readTBQueue finished)
+              pure Nothing
+          isJoinStarted = \case
+            SimExtensionO KSimJoinStarted -> True
+            _                             -> False
+          uo' outs = do
+            uo outs
+            when (autoQuit && any isJoinStarted outs) $ do
+              atomically $ writeTBQueue finished ()
+      pure (ui', uo')
+
 {-
 sim-kad: Safe.fromJustNote Nothing, insertNodeIdTOReqPing did not find pending node
 CallStack (from HasCallStack):
@@ -153,7 +192,11 @@ CallStack (from HasCallStack):
 1
 -- probably we didn't cancel a timeout when evicting a node
 -}
-  -- FIXME: check we get the right number of replies
-  runSimIO @_ @KProc opt' (mkInitPids opt') (mkPState opt') simUserIO
+  grunSimIO @_ @KProc @KSimState (runSimXS @_ @KProc @KSimState)
+                                 opt'
+                                 initXState
+                                 (mkInitPids opt')
+                                 (mkPState opt')
+                                 simUserIO
     >>= handleSimResult
     >>= exitWith

@@ -10,10 +10,10 @@
 module P4P.Proc.Internal where
 
 -- external
-import           Control.Monad (join)
+import           Control.Monad (join, void)
 import           Control.Op
 import           Data.Kind     (Constraint, Type)
-import           Data.Schedule (Tick)
+import           Data.Schedule (Tick, whileJustM)
 import           Data.Void     (Void)
 import           GHC.Generics  (Generic)
 
@@ -63,6 +63,13 @@ class ProtoMsg (PMsg ps) => Protocol ps where
   type AuxO ps :: Type
   type AuxO ps = Void
 
+-- | Empty (unit) protocol, useful for composing with other protocols.
+instance Protocol () where
+  type PMsg () = Void
+  type UserI () = Void
+  type UserO () = Void
+  type AuxO () = Void
+
 type PAddr ps = Addr (PMsg ps)
 
 {- | General message, from/to the runtime, the user, or another process. -}
@@ -81,11 +88,12 @@ data GMsg r u p a
 type GMsgI ps = GMsg (RuntimeI ()) (UserI ps) (PMsg ps) Void
 type GMsgO ps = GMsg (RuntimeO (Addr (PMsg ps))) (UserO ps) (PMsg ps) (AuxO ps)
 
--- | Pure communicating process.
---
--- If your state type implements this, then deriving an instance of 'Process'
--- becomes trivial - all default methods will work. See also 'Instances.hs' for
--- some automatic 'Process' instances of Lens/MutVars wrapped around the state.
+{- | Pure communicating process.
+
+If your state type implements this, then deriving an instance of 'Process'
+becomes trivial - all default methods will work. See also 'Instances.hs' for
+some automatic 'Process' instances of Lens/MutVars wrapped around the state.
+-}
 class Protocol ps => Proc ps where
 
   -- | Receive-address(es) of a process.
@@ -93,34 +101,51 @@ class Protocol ps => Proc ps where
   -- similar to time events.
   getAddrs :: ps -> [Addr (PMsg ps)]
 
+  -- | Current tick of a process.
+  localNow :: ps -> Tick
+
   -- | React to inputs.
   react :: GMsgI ps -> ps -> ([GMsgO ps], ps)
 
+instance Proc () where
+  getAddrs () = []
+  localNow () = 0
+  react v () = ([], ())
+
 {- | Communicating process.
---
--- Processes must be deterministic and interact with their environment only
--- via 'react'. In other words:
---
--- - 'pure state' is equal to 'proceed p state >> suspend p'.
--- - 'suspend p >>= proceed p' must have no meaningful side-effects.
--- - Any meaningful side-effects of 'react' must be fully-represented within
---   'p' as part of 'State p'.
---
--- Equivalently, 'execute' on any inputs must be deterministic in the outputs
--- and all side-effects of its computation context 'm' must be not meaningful.
---
--- The phrase "meaningful side-effects" can be interpreted loosely (e.g. temp
--- files and logging output may be ignored) but should take into account as
--- much as possible, at least all things relevant to a protocol - including any
--- timeout-based behaviours, RNG internal secret states, etc.
---
--- A process that is completely pure in its implementation need not provide an
--- instance of this class directly, but rather should provide an instance of
--- 'Proc' and then use one of our instances for 'PureProcess', listed below.
--- OTOH a process that must "cheat" can implement this class directly, as long
--- as it has deterministic behaviour. For example, if it wants to perform disk
--- accesses directly for convenience during initial development, where the risk
--- of failure is negligible. Note however that eventually this should be fixed.
+
+Processes must be deterministic and interact with their environment only
+via 'react'. In other words:
+
+  * 'pure state' is equal to 'proceed p state >> suspend p'.
+  * 'suspend p >>= proceed p' must have no meaningful side-effects.
+  * Any meaningful side-effects of 'react' must be fully-represented within
+    'p' as part of 'State p'.
+
+Equivalently, 'execute' on any inputs must be deterministic in the outputs and
+all side-effects of its computation context 'm' must be not meaningful.
+
+The phrase "meaningful side-effects" can be interpreted loosely (e.g. temp
+files and logging output may be ignored) but should take into account as much
+as possible, at least all things relevant to a protocol - including any
+timeout-based behaviours, RNG internal secret states, etc.
+
+A process that is completely pure in its implementation need not provide an
+instance of this class directly, but rather should provide an instance of
+'Proc' and then use one of our instances for 'PureProcess', listed below. OTOH
+a process that must "cheat" can implement this class directly, as long as it
+has deterministic behaviour. For example, if it wants to perform disk accesses
+directly for convenience during initial development, where the risk of failure
+is negligible. Note however that eventually this should be fixed.
+
+A @'Process' p@ is similar but different from an 'Control.Arrow.Arrow':
+
+- its input and output types are fixed via the associated type families of
+  @'Protocol' ('State' p)@ (i.e. more specific than 'Control.Arrow.Arrow').
+
+- it produces any number of outputs from a single input (i.e. more general than
+  'Arrow'). Standard ways of composing 'Process'es are also different from the
+  standard ways of composing 'Control.Arrow.Arrow' - see 'P4P.Proc.Util'.
 -}
 class Protocol (State p) => Process p where
   -- | Type of process state
@@ -146,12 +171,21 @@ class Protocol (State p) => Process p where
   -- input" then this should be done in 'react'.
   getAddrsM :: Ctx p m => p -> m [ProcAddr p]
 
+  -- | Current tick of a process.
+  localNowM :: Ctx p m => p -> m Tick
+
+  -- | React to inputs.
   reactM :: Ctx p m => p -> ProcMsgI p -> m [ProcMsgO p]
 
   default getAddrsM
     :: (Ctx p m, PureProcess p, Proc (State p))
     => p -> m [ProcAddr p]
   getAddrsM pt = runPure pt $ \s -> (getAddrs s, s)
+
+  default localNowM
+    :: (Ctx p m, PureProcess p, Proc (State p))
+    => p -> m Tick
+  localNowM pt = runPure pt $ \s -> (localNow s, s)
 
   default reactM
     :: (Ctx p m, PureProcess p, Proc (State p))
@@ -170,16 +204,31 @@ type ProcAddr p = PAddr (State p)
 type ProcMsgI p = GMsgI (State p)
 type ProcMsgO p = GMsgO (State p)
 
--- | Execute several inputs.
+-- | React to several inputs.
 reactAllM
   :: (Process p, Ctx p m, Monad m) => p -> [ProcMsgI p] -> m [ProcMsgO p]
 reactAllM p pinputs = pinputs >$> reactM p |> sequence >$> join
 
--- | Execute a process purely.
-purely
+-- | React to inputs, and handle outputs, with the given actions.
+reactWithIO
+  :: (Process p, Monad m, Ctx p m)
+  => m (Maybe (GMsgI (State p)))
+  -> (Tick -> [GMsgO (State p)] -> m ())
+  -> p
+  -> m ()
+reactWithIO simRunI simRunO proc = void $ whileJustM $ do
+  realNow <- localNowM proc
+  -- we tick over after handling RTTick, so use realNow from before handling it
+  (simRunI >>=) $ traverse $ \i -> do
+    outs <- reactM proc i
+    simRunO realNow outs
+    pure ()
+
+-- | Run some operation on a process, as a state transition on its state.
+asState
   :: (Process p, Ctx p m, Monad m) => (p -> m a) -> State p -> m (a, State p)
-purely execProcess pstate = do
+asState runProcess pstate = do
   p <- proceed pstate
-  r <- execProcess p
+  r <- runProcess p
   s <- suspend p
   pure (r, s)

@@ -20,28 +20,31 @@ import qualified Data.Set                         as S
 import           Control.Lens                     (Iso', anon, at, contains,
                                                    itraversed, use, (%%=),
                                                    (%%@=), (%=), (.=), _1, _2)
-import           Control.Lens.Extra               ()
 import           Control.Lens.Mutable
+import           Control.Lens.Mutable.Extra       (FakeAlloc1 (..),
+                                                   newFakeAlloc1)
 import           Control.Monad                    (void, when)
 import           Control.Monad.Compat.Extra       ()
 import           Control.Monad.Trans.Class        (MonadTrans (..))
+import           Control.Monad.Trans.Extra        (UnMonadTrans, lift2)
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT,
                                                    runState, state)
-import           Control.Monad.Trans.Writer.CPS   (WriterT, execWriterT, tell)
+import           Control.Monad.Trans.Writer.CPS   (WriterT, execWriterT)
+import           Control.Monad.Trans.Writer.Extra (tell1)
 import           Control.Op
 import           Crypto.Random.Extra              (ChaChaDRGInsecure)
 import           Data.Bool                        (bool)
 import           Data.Foldable                    (for_, toList)
 import           Data.Functor.Const               (Const (..))
-import           Data.List.NonEmpty               (NonEmpty (..))
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
 import           Data.Schedule                    (Tick, TickDelta, whileJustM)
 import           Data.Traversable                 (for)
-import           P4P.Proc                         (GMsg (..), ProcAddr,
-                                                   ProcMsgI, Process (..),
-                                                   ProtoMsg (..), RuntimeI (..),
-                                                   RuntimeO (..))
+import           P4P.Proc                         (GMsg (..), GMsgI, GMsgO,
+                                                   ProcAddr, ProcMsgI,
+                                                   Process (..), ProtoMsg (..),
+                                                   RuntimeI (..), RuntimeO (..),
+                                                   asState, reactWithIO)
 import           Safe                             (headNote)
 
 -- internal
@@ -82,35 +85,17 @@ sampleLatency s t = \case
     DistWeibull   mean stddev -> error "not implemented"
       -- see https://stats.stackexchange.com/a/159522
 
--- | Execution runtime for the simulation.
-data SimRT pid ps m = SimRT
-  { simClose  :: !(m ())
-  , simStatus :: !(m (Either (NonEmpty SimError) ()))
-  , simError  :: !(SimError -> m ())
-  , simRunI   :: !(m (Maybe (SimI pid ps)))
-  , simRunO   :: !(Tick -> [SimO pid ps] -> m ())
-  }
-
 -- TODO: SimT should be a newtype, so it doesn't clash with MonadState
 type SimRunState pid p = (Map pid p, SimState pid (State p))
 type SimT pid p = StateT (SimRunState pid p)
 type SimWT pid p m a = WriterT [SimO pid (State p)] (SimT pid p m) a
 
-type Sim pid p m = (Ord pid, Ord (ProcAddr p), Process p, Ctx p m, Monad m)
-
-lift2
-  :: (MonadTrans t1, MonadTrans t2, Monad (t2 m), Monad m) => m a -> t1 (t2 m) a
-lift2 = lift . lift
-
-tell1 :: Monad m => a -> WriterT [a] m ()
-tell1 a = tell [a]
-
 {- | React to a simulation input. -}
 simReact
   :: forall pid p m
-   . Sim pid p m
-  => SimI pid (State p)
-  -> SimT pid p m [SimO pid (State p)]
+   . SimProcess pid p
+  => Ctx p m
+  => Monad m => SimI pid (State p) -> SimT pid p m [SimO pid (State p)]
 simReact input = execWriterT $ do
   realNow <- use $ _2 . _simNow
   procs   <- use _1
@@ -251,19 +236,17 @@ simReact input = execWriterT $ do
           logS $ SimMsgSend pid (MsgProc msg')
 
 newtype PSim ref st pid p = PSim (ref (SimRunState pid p))
-
-type family UnliftTrans m where
-  UnliftTrans (StateT st m) = m
+type SimProcess pid p = (Ord pid, Ord (ProcAddr p), Process p)
 
 instance (
-  Ord pid, Ord (ProcAddr p), Process p,
+  SimProcess pid p,
   Allocable st (SimRunState pid p) ref
  ) => Process (PSim ref st pid p) where
-  type State (PSim ref st pid p) = SimFullState pid (State p)
+  type State (PSim ref st pid p) = SimFullState pid (State p) ()
   type Ctx (PSim ref st pid p) m
-    = ( Ctx p (UnliftTrans m)
-      , Monad (UnliftTrans m)
-      , m ~ StateT st (UnliftTrans m)
+    = ( Ctx p (UnMonadTrans m)
+      , Monad (UnMonadTrans m)
+      , m ~ StateT st (UnMonadTrans m)
       )
 
   {- The type family equation for Ctx is complex but it's vital we keep it.
@@ -271,16 +254,18 @@ instance (
   onto the transformer m, forcing us to declare the constraint everywhere,
   which is much worse than keeping the complexity restricted to just here. -}
 
-  proceed (SimFullState ps ss) = do
+  proceed (SimFullState ps ss ()) = do
     procs <- lift $ proceedAll ps
     fmap PSim $ state $ alloc (procs, ss)
 
   suspend (PSim r) = do
     (procs, ss) <- state $ free r
     ps          <- lift $ suspendAll procs
-    pure (SimFullState ps ss)
+    pure (SimFullState ps ss ())
 
   getAddrsM (PSim r) = pure []
+
+  localNowM (PSim r) = use $ asLens r . _2 . _simNow
 
   reactM (PSim r) i = do
     ps0      <- use $ asLens r
@@ -288,44 +273,30 @@ instance (
     asLens r .= ps1
     pure o
 
+-- note: @p@ here refers to the process type of the whole simulation, not the
+-- individual processes being simulated
 simulate
-  :: forall pid p st ref m
-   . Sim pid p m
-  => Allocable st (SimRunState pid p) ref
-  => SimRT pid (State p) m
-  -> PSim ref st pid p
-  -> StateT st m ()
-simulate simRT (PSim ppp) = void $ whileJustM $ do
-  realNow <- use $ asLens ppp . _2 . _simNow
-  -- we tick over after handling RTTick, so use realNow from before handling it
-  lift simRunI >>= \case
-    Nothing -> pure Nothing -- eof
-    Just i  -> do
-      outs <- reactM (PSim ppp) i
-      lift $ simRunO realNow outs
-      pure (Just ())
-  where SimRT {..} = simRT
+  :: forall p m
+   . (Process p, Monad m, Ctx p m)
+  => m (Maybe (GMsgI (State p)))
+  -> (Tick -> [GMsgO (State p)] -> m ())
+  -> State p
+  -> m (State p)
+simulate simRunI simRunO = fmap snd . asState (reactWithIO @p simRunI simRunO)
 
-runSimulation
-  :: forall pid p st ref m
-   . Sim pid p m
-  => Allocable st (SimRunState pid p) ref
-  => SimRT pid (State p) m
-  -> SimFullState pid (State p)
-  -> StateT st m (SimFullState pid (State p))
-runSimulation simRT s0 = do
-  ppp <- proceed @(PSim ref st pid p) s0
-  simulate simRT ppp
-  suspend ppp
-
-runSimulation1
+-- note: @p@ here does refer to the process type of individual processes
+runSim
   :: forall pid p m
-   . Sim pid p m
-  => SimRT pid (State p) m
-  -> SimFullState pid (State p)
-  -> m (SimFullState pid (State p))
-runSimulation1 simRT s0 =
-  -- uses 'instance Allocable (Maybe a) a (Const ())'
-  -- defined in Control.Lens.Extra
-  runSimulation @_ @p @(Maybe (SimRunState pid p)) @(Const ()) @_ simRT s0
-    `evalStateT` Nothing
+   . SimProcess pid p
+  => Ctx p m
+  => Monad m
+  => m (Maybe (SimI pid (State p)))
+  -> (Tick -> [SimO pid (State p)] -> m ())
+  -> SimFullState pid (State p) ()
+  -> m (SimFullState pid (State p) ())
+runSim simRunI simRunO s0 =
+  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState pid p)) pid p)
+      (lift simRunI)
+      ((lift .) . simRunO)
+      s0
+    `evalStateT` newFakeAlloc1
