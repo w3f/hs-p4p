@@ -1,9 +1,12 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
+{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 
 module P4P.Protocol.DHT.Kademlia.State where
@@ -280,19 +283,19 @@ checkState State {..} = do
   getReqBody (Left  Request {..}) = pure reqBody
   getReqBody (Right rep         ) = throwE $ "not a request: " <> show rep
 
-emptyState
+newState
   :: (R.ByteArrayAccess seed, R.DRG' drg)
   => NodeId
-  -> KSeq NodeAddr
+  -> [NodeAddr]
   -> seed
   -> KParams
   -> State drg
-emptyState self addrs seed params = State
+newState self addrs seed params = State
   { kRng       = R.initialize seed
   , kParams    = params
   , kSchedule  = sched
   , kSelfCheck = selfCheck
-  , kOwnInfo   = NodeLocalInfo (NodeInfo self ((Right 0, ) <$> addrs))
+  , kOwnInfo = NodeLocalInfo (NodeInfo self ((Right 0, ) <$> S.bFromList addrs))
   , kBuckets   = newKBucket (SC.tickNow sched) <$> refreshes
   , kStore     = mempty
   , kSentReq   = BM.newBMap2 (fromIntegral parMaxReqNodes)
@@ -317,6 +320,20 @@ emptyState self addrs seed params = State
         state $ SC.after t (RefreshBucket i)
       )
       (state $ SC.after 0 SelfCheck)
+
+newRandomState
+  :: forall drg f
+   . (R.DRG' drg, Applicative f)
+  => (forall seed . R.ByteArray seed => Int -> f seed)
+  -> [NodeAddr]
+  -> KParams
+  -> f (State drg)
+newRandomState getEntropy addrs params =
+  newState @BS.ByteString
+    <$> getEntropy (fromIntegral (parH params))
+    <*> pure addrs
+    <*> getEntropy (R.seedLength @drg)
+    <*> pure params
 
 newCmdId :: R.DRG' drg => State drg -> (ReqId, State drg)
 newCmdId s@State {..} = (reqid, s { kRng = kRng' })

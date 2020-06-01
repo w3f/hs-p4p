@@ -5,9 +5,17 @@ module P4P.Protocol.DHT.Kademlia
   , NodeAddr
   , KParams(..)
   , NodeInfo(..)
+  , CmdId
+  , Command(..)
+  , CommandBody(..)
+  , CommandReply(..)
+  , RequestRejected(..)
+  , CommandReplyBody(..)
   , Key
   , Value
   , State(..)
+  , kSelf
+  -- High-level types
   , KState
   , KMsg
   , KUserI
@@ -16,7 +24,8 @@ module P4P.Protocol.DHT.Kademlia
   , KadO
   , defaultParams
   , defaultParams'
-  , emptyState
+  , newState
+  , newRandomState
   -- from Internal
   , kInput
   )

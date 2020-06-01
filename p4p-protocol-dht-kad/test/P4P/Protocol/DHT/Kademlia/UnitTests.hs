@@ -10,7 +10,7 @@ import qualified Data.ByteString                  as BS
 
 import           Control.Monad.Trans.Except       (runExceptT)
 import           Control.Monad.Trans.State.Strict (runStateT, state)
-import           Crypto.Random.Extra              (ChaChaDRG', seedFromWords)
+import           Crypto.Random.Extra              (ChaChaDRG')
 import           Data.Maybe                       (fromJust)
 import           Data.Traversable                 (for)
 
@@ -22,8 +22,8 @@ import           P4P.Protocol.DHT.Kademlia.State
 smoke :: IO ()
 smoke = do
   let self = "00000000000000000000000000000000"
-  let seed = seedFromWords (0, 0, 0, 0, 0) :: BS.ByteString
-  let s0   = emptyState self mempty seed defaultParams' :: State ChaChaDRG'
+  let seed = BS.replicate 40 0
+  let s0 = newState self mempty seed defaultParams' :: State ChaChaDRG'
   r <- runExceptT $ checkState s0
   assertEqual "emptyState passed check" r (Right ())
   let res = kGetNodes self s0

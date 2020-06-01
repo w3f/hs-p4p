@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeFamilies      #-}
 
 -- GHC bug, default implementations for a class includes subclass constraint
+-- https://gitlab.haskell.org/ghc/ghc/issues/18259
 {-# OPTIONS_GHC -Wno-error=redundant-constraints #-}
 
 module P4P.Proc.Internal where

@@ -7,8 +7,8 @@ Copyright: 2020 Web3 Foundation <research@web3.foundation>
 Author: Ximin Luo <infinity0@pwned.gg>
 Maintainer: infinity0@pwned.gg
 Stability: alpha
-Homepage: https://github.com/infinity0/hs-p4p
-Bug-Reports: https://github.com/infinity0/hs-p4p/issues
+Homepage: https://github.com/w3f/hs-p4p
+Bug-Reports: https://github.com/w3f/hs-p4p/issues
 Synopsis: peer-for-peer library, common utilities
 Description: Common utilities that should be exported to other libraries.
 Category: Network, P2P, Common
@@ -16,7 +16,7 @@ Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
-  Location: https://github.com/infinity0/hs-p4p
+  Location: https://github.com/w3f/hs-p4p
 
 Flag dev
   Description: Set compile flags for development
@@ -46,7 +46,8 @@ Common generic
 Library
   Import: generic
   Build-Depends:
-      lens
+      extra
+    , lens
     , mutable-lens
     , template-haskell
     -- Crypto.*
@@ -59,8 +60,12 @@ Library
     , transformers
     -- Data.*
     , containers
+    -- Control.Concurrent.Async
+    , async
+    , stm
   HS-Source-Dirs: src
   Exposed-Modules:
+    Control.Concurrent.Async.Extra
     Control.Lens.Extra
     Control.Lens.TH.Extra
     Control.Monad.Compat.Extra

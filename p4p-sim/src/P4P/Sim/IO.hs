@@ -15,11 +15,11 @@ import qualified Data.Map.Strict                as M
 import qualified Data.Set                       as S
 
 import           Control.Clock                  (Clock (..), Clocked (..))
-import           Control.Monad                  (void, when)
+import           Control.Monad                  (forever, join, void, when)
 import           Control.Monad.Extra            (whenJust)
 import           Control.Op
 import           Data.Either                    (fromRight, lefts)
-import           Data.Foldable                  (toList)
+import           Data.Foldable                  (for_, toList)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
 import           Data.Maybe                     (fromMaybe)
@@ -33,6 +33,9 @@ import           Text.Read                      (readEither)
 
 -- external, IO
 import           Control.Clock.IO               (Intv (..), interval, newClock)
+import           Control.Concurrent.Async       (async, cancel, link, link2,
+                                                 wait)
+import           Control.Concurrent.Async.Extra (foreverInterleave)
 import           Control.Concurrent.STM         (atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
@@ -45,10 +48,11 @@ import           Data.Time                      (defaultTimeLocale, formatTime,
 import           Foreign.C.Types                (CInt)
 import           GHC.IO.Handle.FD               (fdToHandle)
 import           System.Directory               (doesPathExist)
+import           System.Exit                    (ExitCode (..))
 import           System.IO                      (BufferMode (..), Handle,
                                                  IOMode (..), hClose, hGetLine,
                                                  hPutStrLn, hSetBuffering,
-                                                 openFile)
+                                                 openFile, stderr)
 import           System.IO.Error                (catchIOError, isEOFError)
 import           UnliftIO.Exception             (bracket)
 
@@ -146,7 +150,17 @@ type SimReRe pid ps
     , Ord (PAddr ps)
     )
 
-type SimUserIO pid ps = (IO (Maybe (SimUserI pid ps)), SimUserO pid ps -> IO ())
+type SimUserIO pid ps
+  = (IO (Maybe (SimUserI pid ps)), SimUserO pid ps -> IO ())
+type UserSimIO pid ps
+  = (Maybe (SimUserI pid ps) -> IO (), IO (SimUserO pid ps))
+
+data UserSimAsync pid ps = UserSimAsync
+  { simWI         :: !(Maybe (SimUserI pid ps) -> IO ())
+  , simRO         :: !(IO (SimUserO pid ps))
+  , simCancel     :: !(IO ())
+  , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
+  }
 
 defaultSimUserIO :: SimReRe pid ps => IO (Maybe String) -> SimUserIO pid ps
 defaultSimUserIO getInput =
@@ -166,12 +180,7 @@ defaultSimUserIO getInput =
   in  (i, o)
 
 -- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO
-  :: IO
-       ( Maybe (SimUserI pid ps) -> IO ()
-       , IO (SimUserO pid ps)
-       , SimUserIO pid ps
-       )
+tbQueueSimUserIO :: IO (UserSimIO pid ps, SimUserIO pid ps)
 tbQueueSimUserIO = do
   qi <- newTBQueueIO 1
   qo <- newTBQueueIO 1
@@ -179,7 +188,26 @@ tbQueueSimUserIO = do
       ro = atomically $ readTBQueue qo
       wi = atomically . writeTBQueue qi
       wo = atomically . writeTBQueue qo
-  pure (wi, ro, (ri, wo))
+  pure ((wi, ro), (ri, wo))
+
+{- | Combine a bunch of 'SimUserIO' together.
+
+The composed version will:
+
+  * read from any input, preserving relative order of inputs
+  * write to every output, in the same order as the given list
+
+EOF ('Nothing') on any input stream will be interpreted as EOF for the whole
+sim. An extra function is also returned, which the caller can use to close the
+input stream proactively in a graceful way: the sim will see an explicit EOF
+after consuming any outstanding unconsumed inputs.
+-}
+combineSimUserIO :: [SimUserIO pid ps] -> IO (SimUserIO pid ps, IO ())
+combineSimUserIO ios = do
+  let (is, os) = unzip ios
+  (i, close) <- foreverInterleave is
+  let o x = for_ os ($ x)
+  pure ((join <$> i, o), close)
 
 -- | Convert a 'runClocked' input to 'SimI' format, with 'Nothing' (EOF) lifted
 -- to the top of the ADT structure.
@@ -294,22 +322,23 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 
 runSimIO
   :: forall pid p
-   . (Sim pid p IO, SimLog pid (State p), SimReRe pid (State p))
+   . Sim pid p IO
+  => SimLog pid (State p)
+  => SimReRe pid (State p)
   => SimOptions
-  -> SimUserIO pid (State p)
   -> S.Set pid
-  -> (pid -> State p)
+  -> (pid -> IO (State p))
+  -> SimUserIO pid (State p)
   -> IO (Either (NonEmpty SimError) ())
-runSimIO opt simUserIO initPids mkPState =
+runSimIO opt initPids mkPState simUserIO =
   bracket (openIOAction simIOAction) closeIOAction $ \SimIOAction {..} -> do
     --print opt
     (iSimState, istate) <- case simIActRead simIState of
       Nothing -> do
-        seed <- getEntropy @ScrubbedBytes 64
-        pure
-          ( newSimState seed simInitLatency initPids
-          , M.fromSet mkPState initPids
-          )
+        seed   <- getEntropy @ScrubbedBytes 64
+        states <- M.traverseWithKey (const . mkPState)
+          $ M.fromSet (const ()) initPids
+        pure (newSimState seed simInitLatency initPids, states)
       Just h -> hGetLine h >$> readNote "simIState read"
     whenJust (simIActWrite simIState)
       $ flip hPutStrLn (show (iSimState, istate))
@@ -333,3 +362,29 @@ runSimIO opt simUserIO initPids mkPState =
 
       simStatus
   where SimOptions {..} = opt
+
+handleSimResult :: Either (NonEmpty SimError) () -> IO ExitCode
+handleSimResult = \case
+  Right ()  -> pure ExitSuccess
+  Left  err -> do
+    hPutStrLn stderr $ "simulation gave errors: " <> show err
+    pure (ExitFailure 1)
+
+newSimAsync
+  :: forall pid p
+   . Maybe (SimUserO pid (State p) -> IO ())
+  -> (SimUserIO pid (State p) -> IO (Either (NonEmpty SimError) ()))
+  -> IO (UserSimAsync pid (State p))
+newSimAsync maybeEat runSimIO' = do
+  ((simWI, simRO), simUserIO) <- tbQueueSimUserIO @_ @(State p)
+  aMain                       <- async $ runSimIO' simUserIO
+  link aMain
+  simCancel <- case maybeEat of
+    Nothing  -> pure (cancel aMain)
+    Just eat -> do
+      aRead <- async $ forever $ simRO >>= eat
+      link aRead
+      link2 aMain aRead
+      pure (cancel aMain >> cancel aRead)
+  let simWaitFinish = wait aMain
+  pure $ UserSimAsync { .. }

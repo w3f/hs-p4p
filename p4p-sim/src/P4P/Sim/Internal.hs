@@ -83,8 +83,8 @@ sampleLatency s t = \case
       -- see https://stats.stackexchange.com/a/159522
 
 -- | Execution runtime for the simulation.
-data SimRT pid ps m = SimRT {
-    simClose  :: !(m ())
+data SimRT pid ps m = SimRT
+  { simClose  :: !(m ())
   , simStatus :: !(m (Either (NonEmpty SimError) ()))
   , simError  :: !(SimError -> m ())
   , simRunI   :: !(m (Maybe (SimI pid ps)))

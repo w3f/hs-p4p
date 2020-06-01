@@ -1,3 +1,6 @@
+{-# LANGUAGE AllowAmbiguousTypes  #-}
+{-# LANGUAGE RankNTypes           #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeApplications     #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
@@ -5,8 +8,7 @@
 
 module Crypto.Random.Extra
   ( DRG'(..)
-  , seedFromWords
-  , naiveRandomWord16
+  , initializeFrom
   , ChaChaDRG'
   , ChaChaDRGInsecure
   , module Data.ByteArray
@@ -18,8 +20,6 @@ import           Crypto.Random
 import           Data.ByteArray             (ByteArray, ByteArrayAccess,
                                              ScrubbedBytes)
 import qualified Data.ByteArray             as B
-import           Data.Word                  (Word16, Word64)
-import           Foreign.Storable           (pokeElemOff)
 
 import qualified Crypto.Cipher.ChaCha.Extra as C
 
@@ -27,19 +27,15 @@ import qualified Crypto.Cipher.ChaCha.Extra as C
 -- | Like 'DRG' but supports initialisation from some arbitrary seed.
 class DRG gen => DRG' gen where
   initialize :: ByteArrayAccess seed => seed -> gen
+  -- | Length of seed in bytes
+  seedLength :: Int
 
--- | Create a new Seed from 5-tuple of words64.
--- This interface is useful when creating a RNG out of tests generators (e.g. QuickCheck).
-seedFromWords
-  :: ByteArray seed => (Word64, Word64, Word64, Word64, Word64) -> seed
-seedFromWords (a, b, c, d, e) = B.allocAndFreeze 40 fill
- where
-  fill s =
-    mapM_ (uncurry (pokeElemOff s)) [(0, a), (1, b), (2, c), (3, d), (4, e)]
-
-naiveRandomWord16 :: DRG gen => Word16 -> gen -> (Word16, gen)
-naiveRandomWord16 maxOut gen =
-  undefined $ randomBytesGenerate @_ @ScrubbedBytes 8 gen
+initializeFrom
+  :: forall gen seed f
+   . (DRG' gen, ByteArray seed, Functor f)
+  => (Int -> f seed)
+  -> f gen
+initializeFrom getEntropy = initialize <$> getEntropy (seedLength @gen)
 
 
 -- | ChaCha Deterministic Random Generator
@@ -51,6 +47,7 @@ instance DRG ChaChaDRG' where
 
 instance DRG' ChaChaDRG' where
   initialize = C.initializePure
+  seedLength = 40
 
 -- | ChaCha Deterministic Random Generator
 --
@@ -64,3 +61,4 @@ instance DRG ChaChaDRGInsecure where
 
 instance DRG' ChaChaDRGInsecure where
   initialize = C.initializePure
+  seedLength = 40

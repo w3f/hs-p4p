@@ -7,8 +7,8 @@ Copyright: 2020 Web3 Foundation <research@web3.foundation>
 Author: Ximin Luo <infinity0@pwned.gg>
 Maintainer: infinity0@pwned.gg
 Stability: alpha
-Homepage: https://github.com/infinity0/hs-p4p
-Bug-Reports: https://github.com/infinity0/hs-p4p/issues
+Homepage: https://github.com/w3f/hs-p4p
+Bug-Reports: https://github.com/w3f/hs-p4p/issues
 Synopsis: peer-for-peer library, simulations
 Description: TODO
 Category: Network, P2P, Simulation
@@ -16,7 +16,7 @@ Tested-With: GHC >= 8.10.1
 
 Source-Repository head
   Type: git
-  Location: https://github.com/infinity0/hs-p4p
+  Location: https://github.com/w3f/hs-p4p
 
 Flag dev
   Description: Set compile flags for development
@@ -49,6 +49,7 @@ Library
       p4p-common
     , p4p-proc
     , op
+    , async
     , containers
     , cryptonite
     , directory
@@ -62,6 +63,8 @@ Library
     , time
     , transformers
     , unliftio
+    -- P4P.Sim.Util:
+    , primitive
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Sim
@@ -70,6 +73,7 @@ Library
     P4P.Sim.IO
     P4P.Sim.Options
     P4P.Sim.Types
+    P4P.Sim.Util
 
 Test-Suite doctests
   Import: generic
@@ -97,14 +101,9 @@ Executable sim
     , p4p-proc
     , p4p-protocol-dht-kad
     , p4p-common
-    , async
-    , bytestring
-    , containers
     , dependent-sum
     , directory
     , op
-    , optparse-applicative
-    , primitive
     , readline
     , unix
   HS-Source-Dirs: app

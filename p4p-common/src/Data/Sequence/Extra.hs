@@ -35,7 +35,10 @@ insertOr v vs = case findIndexL (v ==) vs of
   Nothing -> vs |> v
   Just _  -> vs
 
--- | Bounded sequence, marker type to avoid forgetting to enforce the bound.
+-- | Bounded sequence.
+--
+-- Currently just a marker type to avoid forgetting to enforce the bound, does
+-- not actually enforce the bound yet.
 newtype BSeq a = BSeq { unBSeq :: Seq a }
  deriving (Eq, Ord, Show, Read, Generic, Functor, Applicative, Monad, Foldable, Traversable, Semigroup, Monoid)
 
@@ -45,6 +48,7 @@ newBSeq = BSeq empty
 lenBSeq :: BSeq a -> Int
 lenBSeq (BSeq s) = length s
 
+-- FIXME: take a bound parameter
 bFromList :: [a] -> BSeq a
 bFromList = BSeq . fromList
 

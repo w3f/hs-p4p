@@ -25,7 +25,8 @@ import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
 
 
 -- | A pair that is slightly easier to type
-data KV k v = !k :~ !v deriving (Eq, Ord, Show, Read, Generic)
+data KV k v = !k :~ !v
+  deriving (Eq, Ord, Show, Read, Generic)
 
 data SimProcEvt' pid i o a =
   -- | A process received a message.
@@ -49,7 +50,7 @@ data SimProcState ps i a = SimProcState
   , spInbox :: !(Map Tick (SQ.Seq i))
   , spState :: !ps
   }
- deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | User input into the sim. TODO: will be extended with debugging commands.
 data SimUserI' pid ps ui i a =
@@ -93,22 +94,21 @@ data KnownDistNonNeg a =
  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | Latency profile.
-data SimLatency =
-    -- | Latency is independent of the addresses.
-    SLatAddrIndep !(KnownDistNonNeg TickDelta)
- deriving (Eq, Ord, Show, Read, Generic)
+data SimLatency = SLatAddrIndep !(KnownDistNonNeg TickDelta)
+    -- ^ Latency is independent of the addresses.
+  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | State of the simulation.
 --
 -- Note that process state is stored separately.
-data SimState' pid i a = SimState {
-    simNow     :: !Tick
+data SimState' pid i a = SimState
+  { simNow     :: !Tick
   , simDRG     :: !ChaChaDRGInsecure
   , simLatency :: !SimLatency
   , simAddr    :: !(Map a (Set pid))
   , simIn      :: !(Map pid (Map Tick (SQ.Seq i)))
   }
- deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 makeLenses_ ''SimState'
 type SimState pid ps = SimState' pid (GMsgI ps) (PAddr ps)
 
@@ -121,21 +121,20 @@ newSimState
 newSimState seed latency pids =
   SimState 0 (initialize seed) latency mempty (M.fromSet (const mempty) pids)
 
-data SimError =
-    SimFailedReplayCompare
-    { simFailedReplayCompareType     :: !String
-    , simFailedReplayCompareTick     :: !Tick
-    , simFailedReplayCompareExpected :: !String
-    , simFailedReplayCompareActual   :: !String
-    }
+data SimError = SimFailedReplayCompare
+  { simFailedReplayCompareType     :: !String
+  , simFailedReplayCompareTick     :: !Tick
+  , simFailedReplayCompareExpected :: !String
+  , simFailedReplayCompareActual   :: !String
+  }
     -- ^ Failed to compare replay at the given tick.
- deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 
 data SimFullState pid ps = SimFullState
   { simProcs :: !(Map pid ps)
   , simState :: !(SimState pid ps)
   }
- deriving (Generic)
+  deriving Generic
 -- note: we are forced to do this to define @instance Protocol@, because we
 -- can't apply type families in the instance declaration.
 deriving instance (Eq (Map pid ps), Eq (SimState pid ps))

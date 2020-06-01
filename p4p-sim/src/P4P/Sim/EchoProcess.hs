@@ -12,17 +12,17 @@ import           P4P.Proc     (GMsg (..), Proc (..), ProtoMsg (..),
 
 
 type EAddr = Word64
-data EchoMsg = EMsg {
-    src :: !EAddr
+data EchoMsg = EMsg
+  { src :: !EAddr
   , dst :: !EAddr
   }
- deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 
-data EchoState = EState {
-    addrs :: ![EAddr]
+data EchoState = EState
+  { addrs :: ![EAddr]
   , count :: !Word64
   }
- deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 
 type EchoUserI = String
 type EchoUserO = String

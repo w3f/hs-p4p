@@ -1,7 +1,9 @@
 {-| P4P simulations. -}
 
 module P4P.Sim
-  ( KV(..)
+  (
+  -- * Main definitions
+    KV(..)
   , SimUserI'(..)
   , SimUserI
   , SimUserO'(..)
@@ -20,7 +22,21 @@ module P4P.Sim
   , suspendAll
   , simulate
   , runSimulation
-  -- external
+  -- * Options
+  , SimOptions(..)
+  , parseArgsIO
+  , parserInfo
+  , simOptions
+  , SimProto(..)
+  -- * IO and utilities
+  , SimLog
+  , SimReRe
+  , defaultSimUserIO
+  , runSimIO
+  , handleSimResult
+  , UserSimAsync(..)
+  , newSimAsync
+  -- * External re-exports
   , StateT(..)
   , evalStateT
   )
@@ -28,5 +44,8 @@ where
 
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import           Data.List.NonEmpty               (NonEmpty (..))
+
 import           P4P.Sim.Internal
+import           P4P.Sim.IO
+import           P4P.Sim.Options
 import           P4P.Sim.Types

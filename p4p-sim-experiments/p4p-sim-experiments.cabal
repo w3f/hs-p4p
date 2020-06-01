@@ -1,5 +1,5 @@
 Cabal-Version: 2.2
-Name: p4p-zero
+Name: p4p-sim-experiments
 Version: 0.0
 Build-Type: Simple
 License: AGPL-3.0-or-later
@@ -9,9 +9,9 @@ Maintainer: infinity0@pwned.gg
 Stability: alpha
 Homepage: https://github.com/w3f/hs-p4p
 Bug-Reports: https://github.com/w3f/hs-p4p/issues
-Synopsis: peer-for-peer library, empty example package
-Description: This package is a template for other P4P packages.
-Category: Network, P2P, Example
+Synopsis: peer-for-peer library, simulation experiments
+Description: Research-level network experiments conducted on p4p-sim
+Category: Network, P2P, Simulation, Experiments
 Tested-With: GHC >= 8.10.1
 
 Source-Repository head
@@ -43,29 +43,15 @@ Common generic
     GHC-Prof-Options:
       -fprof-auto
 
-Library
-  Import: generic
-  Build-Depends:
-  HS-Source-Dirs: src
-  Exposed-Modules:
-    P4P.Zero
-
-Test-Suite doctests
+Executable sim-kad
   Import: generic
   GHC-Options: -threaded
   Build-Depends:
-      doctest
-  HS-Source-Dirs: test
-  Type: exitcode-stdio-1.0
-  Main-Is: DocTests.hs
-
-Test-Suite unit
-  Import: generic
-  GHC-Options: -threaded
-  Build-Depends:
-      tasty
---    , tasty-quickcheck
---    , tasty-hunit
-  HS-Source-Dirs: test
-  Type: exitcode-stdio-1.0
-  Main-Is: UnitTests.hs
+      p4p-sim
+    , p4p-protocol-dht-kad
+    , p4p-common
+    , async
+    , containers
+    , stm
+  HS-Source-Dirs: app
+  Main-Is: SimKad.hs
