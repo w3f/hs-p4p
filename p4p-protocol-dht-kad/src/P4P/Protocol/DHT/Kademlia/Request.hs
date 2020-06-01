@@ -59,7 +59,8 @@ data IReqProcess = IReqProcess
   -- ^ Task for timing out this whole process.
   , ireqReply   :: !ReplyBody
   -- ^ The result of the request, to be sent (and re-sent) to the requestor.
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 makeLenses_ ''IReqProcess
 
 ireqIndex :: HasCallStack => Msg -> ((NodeId, RequestBody), ReqId)
@@ -94,8 +95,10 @@ ireqEnsure lsched lireq timeout req mkRepBody = runState $ do
       repBody <- state mkRepBody
       let reply = replyForRequest req (Right repBody) now addr
       lt <- lsched %%= SC.after timeout (TOIReq reqSrc reqBody)
-      let ireqProc =
-            IReqProcess { ireqMsg = req, ireqTimeout = lt, ireqReply = repBody }
+      let ireqProc = IReqProcess { ireqMsg     = req
+                                 , ireqTimeout = lt
+                                 , ireqReply   = repBody
+                                 }
       pure ([reply, kLog $ I_KProcessNew kproc], Present ireqProc)
  where
   (reqSrc, reqBody) = fst $ ireqIndex req
@@ -123,7 +126,8 @@ data RetryState = RetryState
   -- ^ Number of retries so far.
   , retryTask  :: !(SC.Task KTask)
   -- ^ Task for timing out a single try (resend).
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 
 {- | An ongoing process to handle replies to requests we make to another node.
 
@@ -150,7 +154,8 @@ data OReqProcess = OReqProcess
   -- is interested in the OReqProcess, and it cannot be cancelled until it
   -- times out naturally.
   , oreqRetry   :: !RetryState
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 makeLenses_ ''OReqProcess
 
 oreqInitTick :: OReqProcess -> SC.Tick

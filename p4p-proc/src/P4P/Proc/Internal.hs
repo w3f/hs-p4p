@@ -44,14 +44,12 @@ instance ProtoMsg Void where
 -- The 'task' type-param is provided in case users want to re-use this data
 -- structure for other purposes; the simulation framework instantiates it to
 -- '()'.
-data RuntimeI task =
-  RTTick !Tick !task
- deriving (Eq, Ord, Show, Read, Generic)
+data RuntimeI task = RTTick !Tick !task
+  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | Output from a process to the runtime execution environment.
-data RuntimeO addr =
-  RTAddr ![addr] ![addr]
- deriving (Eq, Ord, Show, Read, Generic)
+data RuntimeO addr = RTAddr ![addr] ![addr]
+  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | Protocol with its protocol-messages and user-messages.
 class ProtoMsg (PMsg ps) => Protocol ps where

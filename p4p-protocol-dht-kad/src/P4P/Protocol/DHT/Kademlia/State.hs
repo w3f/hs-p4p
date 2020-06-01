@@ -63,7 +63,7 @@ data KParams = KParams
   -- "alpha is a system-wide concurrency parameter, such as 3"
   , parMaxAddr       :: !Word8
   -- ^ Maximum number of addresses to store per node.
-
+  --------
   , parMaxReqPerNode :: !Word16
   -- ^ Max number of outstanding outgoing or incoming requests per peer, for
   -- rate-limiting. e.g. 256.
@@ -73,7 +73,7 @@ data KParams = KParams
   , parMaxCmd        :: !Word16
   -- ^ Max number of outstanding local-user commands, for rate-limiting,
   -- e.g. 4096.
-
+  --------
   , parTOOReqRetry   :: !SC.TickDelta
   -- ^ When handling outgoing requests, this is the base retry time that the
   -- OReqProcess will attempt exponential-backoff retries at. It should be
@@ -89,14 +89,14 @@ data KParams = KParams
   -- ^ Overall reply timeout time, for handling replies to incoming requests.
   -- This is the time that we wait for after sending back the initial reply,
   -- for duplicate incoming requests where we'll send back the same reply.
-
+  --------
   , parTOICmdOReq    :: !SC.TickDelta
   -- ^ When handling incoming requests, this is the time that the ReqProcess
   -- will wait for each outgoing request that it is interested in.
   , parTOICmd        :: !SC.TickDelta
   -- ^ Overall request timeout time, for handling incoming requests. This is
   -- the overall time that each ICmdProcess will wait, before timing out.
-
+  --------
   , parIntvKBRefresh :: !SC.TickDelta
   -- ^ Bucket refresh interval. Paper recommends 1 hr.
   , parIntvValRepub  :: !SC.TickDelta
@@ -105,8 +105,8 @@ data KParams = KParams
   -- ^ Value expire interval. Paper recommends 24 hrs.
   , parIntvSelfCheck :: !SC.TickDelta
   -- ^ Self-consistency time.
-
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 parHBits :: KParams -> Int
 parHBits KParams {..} = fromIntegral parH * 8
@@ -183,7 +183,8 @@ data KBucket = KBucket
   -- ^ "To avoid pathological cases when no traffic exists, each node refreshes
   -- a bucket in whose range it has not performed a node lookup within an hour."
   , bRefresh          :: !(SC.Task KTask) -- RefreshBucket
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 makeLenses_ ''KBucket
 
 newKBucket :: SC.Tick -> SC.Task KTask -> KBucket
@@ -202,7 +203,8 @@ data StoreEntry = StoreEntry
   -- This basically just controls the republish interval.
   , sRepub  :: !(SC.Task KTask) -- RepublishKey
   , sExpire :: !(SC.Task KTask) -- ExpireValue
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 
 type BoundedMap k v = BM.BMap2 k RequestBody v
 
@@ -225,7 +227,6 @@ data State drg = State
   , kParams    :: !KParams
   , kSchedule  :: !(SC.Schedule KTask)
   , kSelfCheck :: !(SC.Task KTask) -- SelfCheck
-
   , kOwnInfo   :: !NodeLocalInfo
   , kBuckets   :: !(V.Vector KBucket)
   -- ^ k-buckets. Index 0 stores the nodes closest to us.
@@ -249,7 +250,8 @@ data State drg = State
   -- automatically refreshing a bucket) and are currently handling.
   -- TODO(rate): bounded Map, except for "system" commands
   , kRecvCmd   :: !(BM.BMap CmdId ICmdProcess)
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 makeLenses_ ''State
 
 checkState :: Monad m => State drg -> ExceptT ErrMsg m ()

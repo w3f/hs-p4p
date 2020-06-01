@@ -314,7 +314,7 @@ kInsertNode input oreqProc' = case input of
     _ -> doNothing
   P.MsgUser _        -> doNothing
   P.MsgProc Msg {..} -> case body of
-    Left Request {} -> do
+    Left Request{} -> do
       insertNodeId Nothing False src srcAddr
     Right Reply {..} -> case oreqProc' of
       Nothing ->
@@ -322,7 +322,7 @@ kInsertNode input oreqProc' = case input of
         -- reply we don't want. the paper is silent on this matter. this could be
         -- spam or it could be that we simply timed out waiting for the request.
         doNothing
-      Just OReqProcess {} -> do
+      Just OReqProcess{} -> do
         let isPong = case repBody of
               Right Pong -> True
               _          -> False
@@ -373,21 +373,21 @@ kSimpleLookup parallel numResults target qState =
   -- The below is a minor variation that deals with replies arriving
   -- one-by-one rather than all at once.
   let closestK =
-          Set.fromList
-            $ take numResults
-            $ sortOn (distance target)
-            $ toList
-            $ M.keysSet sqAll
+        Set.fromList
+          $ take numResults
+          $ sortOn (distance target)
+          $ toList
+          $ M.keysSet sqAll
       candidates =
-          closestK
-            `Set.difference` M.keysSet sqOk
-            `Set.difference` sqErr
-            `Set.difference` sqWait
+        closestK
+          `Set.difference` M.keysSet sqOk
+          `Set.difference` sqErr
+          `Set.difference` sqWait
       toQuery =
-          Set.fromList
-            $ take (parallel - Set.size sqWait)
-            $ sortOn (distance target)
-            $ toList candidates
+        Set.fromList
+          $ take (parallel - Set.size sqWait)
+          $ sortOn (distance target)
+          $ toList candidates
   in  if null candidates && null (Set.intersection closestK sqWait)
         then (Right (M.restrictKeys sqAll closestK), qState)
         else
@@ -408,12 +408,12 @@ kSimpleInsert parallel qState =
   --
   -- The below just tries all of them, honouring the parallel parameter.
   let candidates =
-          M.keysSet sqAll
-            `Set.difference` M.keysSet sqOk
-            `Set.difference` sqErr
-            `Set.difference` sqWait
+        M.keysSet sqAll
+          `Set.difference` M.keysSet sqOk
+          `Set.difference` sqErr
+          `Set.difference` sqWait
       toQuery =
-          Set.fromList $ take (parallel - Set.size sqWait) $ toList candidates
+        Set.fromList $ take (parallel - Set.size sqWait) $ toList candidates
       result = M.unionWith (error "unreachable")
                            (Just <$> sqOk)
                            (M.fromSet (const Nothing) sqErr)
@@ -671,8 +671,7 @@ icmdOReqResult cmdId reqDst reqBody rep s0 = flip runStateWT s0 $ do
           _             -> error "unreachable"
         Just cmdInput ->
           stateWT $ icmdRunInput cmdId cmdProc (Just rep) cmdInput
- where
-  State {..}   = s0
+  where State {..} = s0
 
 kHandleInput
   :: (Monad m, R.DRG' g)
@@ -769,8 +768,7 @@ kInput input s0 = flip runStateWT s0 $ do
       stateWT $ kInsertNode input oreqProc'
       stateWT $ kHandleInput input oreqProc'
       whenJust maybePing $ stateWT . kInput
- where
-  State {..}   = s0
+  where State {..} = s0
 
 kInput'
   :: (R.DRG' g, Monad m) => KadI' -> StateT (State g) (WriterT [KadO] m) ()

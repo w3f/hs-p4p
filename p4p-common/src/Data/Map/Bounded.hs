@@ -64,10 +64,11 @@ adjustF_ f k m = case M.lookup k m of
   Nothing -> pure m
 
 
-data BMap k v = BMap {
-    bMap     :: !(M.Map k v)
+data BMap k v = BMap
+  { bMap     :: !(M.Map k v)
   , bMaxSize :: !Int
-  } deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+  }
+  deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
 
 newBMap :: Ord k => Int -> BMap k v
 newBMap = BMap mempty
@@ -75,7 +76,8 @@ newBMap = BMap mempty
 setMap1 :: BMap k v -> M.Map k' v' -> BMap k' v'
 setMap1 m m' = m { bMap = m' }
 
-adjustF :: (Applicative f, Ord k) => (a -> f a) -> k -> BMap k a -> f (BMap k a)
+adjustF
+  :: (Applicative f, Ord k) => (a -> f a) -> k -> BMap k a -> f (BMap k a)
 adjustF f k m = adjustF_ f k (bMap m) <&> setMap1 m
 
 alterF
@@ -96,13 +98,14 @@ traverseWithKey :: Applicative t => (k -> a -> t b) -> BMap k a -> t (BMap k b)
 traverseWithKey f m = setMap1 m <$> M.traverseWithKey f (bMap m)
 
 
-data BMap2 k1 k2 v = BMap2 {
-    b2Map      :: !(M.Map k1 (M.Map k2 v))
+data BMap2 k1 k2 v = BMap2
+  { b2Map      :: !(M.Map k1 (M.Map k2 v))
   , b2MaxSize1 :: !Int
   -- ^ max number of k1 entries
   , b2MaxSize2 :: !Int
   -- ^ max number of k2 entries per k1
-  } deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+  }
+  deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
 
 newBMap2 :: (Ord k1) => Int -> Int -> BMap2 k1 k2 v
 newBMap2 = BMap2 mempty

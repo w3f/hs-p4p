@@ -34,7 +34,8 @@ type KSeq a = S.BSeq a -- sequence of at most k entries, TODO: enforce
 data NodeInfo a = NodeInfo
   { niNodeId   :: !NodeId
   , niNodeAddr :: !(KSeq a)
-  } deriving (Show, Read, Generic, Eq, Ord, Functor)
+  }
+  deriving (Show, Read, Generic, Eq, Ord, Functor)
 makeLenses_ ''NodeInfo
 
 type NodeInfos = KSeq (NodeInfo NodeAddr)
@@ -51,9 +52,8 @@ data KTask =
   | TOICmd !CmdId
     deriving (Show, Read, Generic, Eq, Ord)
 
-data RequestRejected =
-    TryAgainLater !SC.TickDelta
-    deriving (Show, Read, Generic, Eq, Ord)
+data RequestRejected = TryAgainLater !SC.TickDelta
+  deriving (Show, Read, Generic, Eq, Ord)
 
 data RequestBody =
     Ping
@@ -65,7 +65,8 @@ data RequestBody =
 data Request = Request
   { reqId   :: !ReqId
   , reqBody :: !RequestBody
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 data ReplyBody =
     Pong
@@ -82,7 +83,8 @@ data Reply = Reply
   -- ^ Pings can also be piggy-backed on RPC replies for the RPC recipient to
   -- obtain additional assurance of the sender's network address.
   , repBody       :: !(Either RequestRejected ReplyBody)
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 type MsgBody = Either Request Reply
 
@@ -96,7 +98,8 @@ data Msg = Msg
   -- will at see what we authenticate here, once we add that functionality.
   , sent    :: !SC.Tick
   , body    :: !MsgBody
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 -- | Given an incoming reply, if it is also an implicit ping this function will
 -- generate the "virtual request" that represents that ping.
@@ -135,7 +138,8 @@ Satisfying this takes up several outgoing requests.
 data Command = Command
   { cmdId   :: !CmdId
   , cmdBody :: !CommandBody
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 data CommandBody =
     JoinNetwork !(NodeInfo NodeAddr)
@@ -147,7 +151,8 @@ data CommandBody =
 data CommandReply = CommandReply
   { cmdRepId   :: !CmdId
   , cmdRepBody :: !(Either RequestRejected CommandReplyBody)
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 data CommandReplyBody =
     CommandTimedOut !SC.TickDelta

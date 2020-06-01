@@ -46,7 +46,8 @@ data SimpleQuery r = SimpleQuery
   , sqWait :: !(Set NodeId)
   -- ^ Nodes we have made a query to and are waiting on. This should be
   -- precisely the number of 'OReqProcess's in our 'F.SExpect'.
-  } deriving (Show, Read, Generic, Eq, Ord)
+  }
+  deriving (Show, Read, Generic, Eq, Ord)
 
 newSimpleQuery :: NodeInfos' -> SimpleQuery r
 newSimpleQuery initNodes = SimpleQuery initNodes mempty mempty mempty
@@ -104,7 +105,8 @@ data ICmdProcess = ICmdProcess
   -- ^ Whether the command was external (from a user) or internal (from an
   -- automated behaviour such as a bucket refresh). This determines whether we
   -- send out a CommandReply when the command finishes.
-  } deriving (Show, Read, Generic, Eq)
+  }
+  deriving (Show, Read, Generic, Eq)
 makeLenses_ ''ICmdProcess
 
 cmdUserReply :: CmdId -> CommandReplyBody -> KadO
