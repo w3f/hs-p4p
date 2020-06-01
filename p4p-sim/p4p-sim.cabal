@@ -49,23 +49,27 @@ Library
       p4p-common
     , p4p-proc
     , op
-    , async
     , containers
     , cryptonite
-    , directory
     , extra
     , lens
     , mutable-lens
     , optparse-applicative
-    , pretty-simple
     , safe
     , schedule
+    , transformers
+    -- P4P.Sim.IO:
+    , async
+    , directory
+    , pretty-simple
     , stm
     , time
-    , transformers
     , unliftio
     -- P4P.Sim.Util:
     , primitive
+    -- P4P.Sim.Util.IO:
+    , readline
+    , unix
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Sim
@@ -76,6 +80,7 @@ Library
     P4P.Sim.Options
     P4P.Sim.Types
     P4P.Sim.Util
+    P4P.Sim.Util.IO
 
 Test-Suite doctests
   Import: generic
@@ -104,9 +109,6 @@ Executable sim
     , p4p-protocol-dht-kad
     , p4p-common
     , dependent-sum
-    , directory
     , op
-    , readline
-    , unix
   HS-Source-Dirs: app
   Main-Is: Sim.hs

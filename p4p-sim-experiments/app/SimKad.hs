@@ -15,7 +15,6 @@ import qualified Data.Set                         as S
 
 import           Control.Lens                     ((%%=), (%%~), (&), (.=))
 import           Control.Lens.TH.Extra            (makeLenses_)
-import           Control.Monad                    (when)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State        (StateT (..), get, runState)
 import           Control.Monad.Trans.Writer.CPS   (WriterT, execWriterT)
@@ -28,12 +27,6 @@ import           Data.Maybe                       (fromJust)
 import           GHC.Generics                     (Generic)
 
 -- external, impure
-import           Control.Concurrent.Async         (race)
-import           Control.Concurrent.STM           (atomically)
-import           Control.Concurrent.STM.TBQueue   (newTBQueueIO, readTBQueue,
-                                                   writeTBQueue)
-import           Control.Concurrent.STM.TVar      (newTVarIO, readTVarIO,
-                                                   writeTVar)
 import           System.Environment               (getArgs)
 import           System.Exit                      (exitWith)
 
@@ -41,10 +34,14 @@ import           System.Exit                      (exitWith)
 import           P4P.Proc
 import           P4P.Protocol.DHT.Kademlia
 import           P4P.Sim
-import           P4P.Sim.IO                       (defaultGetInput)
-import           P4P.Sim.Options
+import           P4P.Sim.Options                  (SimIAction (..),
+                                                   SimIOAction (..),
+                                                   delayedInitMode,
+                                                   _simIOAction)
 import           P4P.Sim.Util                     (ChaChaDRGInsecure, PMut',
                                                    Pid, getEntropy, mkInitPids)
+import           P4P.Sim.Util.IO                  (hookAutoJoinQuit,
+                                                   maybeTerminalGetInput)
 
 
 type KS = KState ChaChaDRGInsecure
@@ -61,7 +58,6 @@ mkPState opt p = do
 
 data KSimState = KSimState
   { ksDRG     :: !ChaChaDRGInsecure
-    -- ^ output queue, for flow control
   , ksJoining :: !(Maybe (Either (Map Pid (Maybe NodeId)) (Map Pid NodeId)))
   }
   deriving (Show, Read, Generic, Eq)
@@ -160,30 +156,13 @@ main = do
   drg <- initializeFrom getEntropy
   let initXState = KSimState drg Nothing
 
-  let (ui, uo)   = defaultSimUserIO @_ @KS @KSimState defaultGetInput
-  simUserIO <- if not autoJoin && not autoQuit
-    then pure (ui, uo)
-    else do
-      -- by design principle, processes are meant to be suspended at any time,
-      -- and so they have no explicit awareness of when they are started or
-      -- stopped. so we have this slight hack to support autoJoin/autoQuit
-      started  <- newTVarIO False
-      finished <- newTBQueueIO 1
-      let ui' = readTVarIO started >>= \case
-            False -> do
-              atomically $ writeTVar started True
-              pure (Just (SimExtensionI KSimJoinAll))
-            True -> fmap (either id id) $ race ui $ do
-              atomically (readTBQueue finished)
-              pure Nothing
-          isJoinStarted = \case
-            SimExtensionO KSimJoinStarted -> True
-            _                             -> False
-          uo' outs = do
-            uo outs
-            when (autoQuit && any isJoinStarted outs) $ do
-              atomically $ writeTBQueue finished ()
-      pure (ui', uo')
+  getInput <- maybeTerminalGetInput "p4p" ".sim-kad_history" "p4p Kad> "
+  let joinStarted = \case
+        KSimJoinStarted -> True
+        _               -> False
+  simUserIO <-
+    hookAutoJoinQuit @_ @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
+      $ defaultSimUserIO @_ @KS @KSimState getInput
 
 {-
 sim-kad: Safe.fromJustNote Nothing, insertNodeIdTOReqPing did not find pending node

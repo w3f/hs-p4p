@@ -1,7 +1,6 @@
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
-{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
@@ -17,72 +16,18 @@ import           P4P.Proc                  (Proc, Protocol (..))
 import           P4P.Protocol.DHT.Kademlia (KState, defaultParams,
                                             newRandomState)
 
--- external, IO / readline
-import           Data.IORef                (atomicModifyIORef, newIORef,
-                                            writeIORef)
-import           System.Console.Readline   (addHistory, readline)
-import           System.Directory          (XdgDirectory (..),
-                                            createDirectoryIfMissing,
-                                            getXdgDirectory)
+-- external, IO
 import           System.Environment        (getArgs)
 import           System.Exit               (ExitCode (..), exitWith)
-import           System.IO                 (BufferMode (..), IOMode (..),
-                                            hGetLine, hIsEOF, hPutStrLn,
-                                            hSetBuffering, openFile, stderr,
-                                            stdin)
-import           System.Posix.IO           (stdInput)
-import           System.Posix.Terminal     (queryTerminal)
 
 -- internal
 import           P4P.Sim
 import           P4P.Sim.EchoProcess       (EchoState (..))
-import           P4P.Sim.IO                (hGetLineOrEOF, untilJustM)
 import           P4P.Sim.Options           (simParseOptions)
 import           P4P.Sim.Util              (ChaChaDRGInsecure, PMut', Pid,
                                             getEntropy, mkInitPids)
+import           P4P.Sim.Util.IO           (maybeTerminalGetInput)
 
-
--- | Load & save history to/from a file.
---
--- Returns a monadic action. When it is run on a user input, it will add to the
--- history only if the input does not duplicate the previous entry, similar to
--- how bash works. The result of the action is a 'Maybe' 'String' representing
--- whether the input was added to the history or not.
---
--- Example usage:
---
--- @
---    dir <- getXdgDirectory XdgData "myApp"
---    createDirectoryIfMissing True dir
---    let history = dir <> "/.myApp_history"
---    maybeAddHistory <- setupReadlineHistory history
---    pure $ readline "myApp> " >>= \case
---      Nothing -> hPutStrLn stderr "" >> pure Nothing
---      Just s  -> maybeAddHistory s >> pure (Just s)
--- @
---
--- TODO: export to upstream readline
-setupReadlineHistory :: FilePath -> IO (String -> IO (Maybe String))
-setupReadlineHistory history = do
-  hist <- openFile history ReadWriteMode
-  hSetBuffering hist LineBuffering
-  prev <- newIORef ""
-  -- load existing history
-  untilJustM $ hIsEOF hist >>= \case
-    True  -> pure (Just ())
-    False -> do
-      s <- hGetLine hist
-      addHistory s
-      writeIORef prev s
-      pure Nothing
-  pure $ \s -> if null s
-    then pure Nothing
-    else do
-    -- append new history if different from previous
-      atomicModifyIORef prev (\s' -> (s, if s' == s then Nothing else Just s))
-        >>= maybe
-              (pure Nothing)
-              (\s' -> addHistory s' >> hPutStrLn hist s' >> pure (Just s'))
 
 data SProt ps where
   SEcho :: SProt EchoState
@@ -114,16 +59,9 @@ withSimProto opt f = case simProto of
 -- run via stdin/stdout
 runStd :: SimOptions -> IO ExitCode
 runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
-  getInput <- queryTerminal stdInput >>= \case
-    False -> pure (hGetLineOrEOF stdin)
-    True  -> do
-      dir <- getXdgDirectory XdgData "p4p"
-      createDirectoryIfMissing True dir
-      let history = dir <> "/.sim_history"
-      maybeAddHistory <- setupReadlineHistory history
-      pure $ readline ("p4p " <> drop 5 (show simProto) <> "> ") >>= \case
-        Nothing -> hPutStrLn stderr "" >> pure Nothing
-        Just s  -> maybeAddHistory s >> pure (Just s)
+  getInput <- maybeTerminalGetInput "p4p"
+                                    ".sim_history"
+                                    ("p4p " <> drop 5 (show simProto) <> "> ")
   let initPids  = mkInitPids opt
   let simUserIO = defaultSimUserIO @_ @ps @() getInput
   runSimIO @_ @(PMut' ps) opt initPids mkPS simUserIO >>= handleSimResult

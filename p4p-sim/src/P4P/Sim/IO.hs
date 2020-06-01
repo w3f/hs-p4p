@@ -67,6 +67,7 @@ import           P4P.Sim.Options                (SimIAction (..),
                                                  SimOptions (..))
 import           P4P.Sim.Types
 
+
 -- TODO: export to upstream extra
 untilJustM :: Monad m => m (Maybe a) -> m a
 untilJustM act = go
@@ -188,6 +189,8 @@ defaultSimUserIO getInput =
             Left  _           -> case readEither s of
               Right r -> pure (Just (Just r))
               Left  e -> putStrLn e >> pure Nothing
+                -- TODO: add some help text, ideally with some introspection
+                -- that prints out some generated concrete examples
       o = \case
         SimProcUserO pid uo -> print $ pid :~ uo
         x                   -> print x
