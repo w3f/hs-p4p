@@ -18,8 +18,16 @@ Source-Repository head
   Type: git
   Location: https://github.com/w3f/hs-p4p
 
+-- begin common stanzas
 Flag dev
-  Description: Set compile flags for development
+  Description:
+    Set compile flags for development.
+  Default:     False
+  Manual:      True
+
+Flag release
+  Description:
+    Set compile flags for release-checking. Users don't need this.
   Default:     False
   Manual:      True
 
@@ -36,12 +44,22 @@ Common generic
     -Wunused-packages
   if flag(dev)
     GHC-Options:
-      -Werror
       -O2
     -- some optimisations cause memory leaks; switch on -O2 and profiling so we
     -- can detect this during development so it doesn't cause surprises later
     GHC-Prof-Options:
       -fprof-auto
+  if flag(release)
+    GHC-Options:
+      -Werror
+
+Common executable
+  GHC-Options:
+    -threaded
+  if flag(dev)
+    GHC-Options:
+      -rtsopts
+-- end common stanzas
 
 Library
   Import: generic
@@ -83,8 +101,7 @@ Library
     P4P.Sim.Util.IO
 
 Test-Suite doctests
-  Import: generic
-  GHC-Options: -threaded
+  Import: generic, executable
   Build-Depends:
       doctest
   HS-Source-Dirs: test
@@ -92,8 +109,7 @@ Test-Suite doctests
   Main-Is: DocTests.hs
 
 Test-Suite unit
-  Import: generic
-  GHC-Options: -threaded
+  Import: generic, executable
   Build-Depends:
       tasty
   HS-Source-Dirs: test
@@ -101,8 +117,7 @@ Test-Suite unit
   Main-Is: UnitTests.hs
 
 Executable sim
-  Import: generic
-  GHC-Options: -threaded
+  Import: generic, executable
   Build-Depends:
       p4p-sim
     , p4p-proc

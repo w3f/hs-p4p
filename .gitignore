@@ -1,2 +1,9 @@
 /dist-newstyle
 /.ghc.environment.*
+
+/*.hp
+/*.svg
+/*.png
+/*.s
+/*.i
+/*.o
