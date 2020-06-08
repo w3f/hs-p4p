@@ -57,25 +57,24 @@ import qualified P4P.Proc                          as P
 import qualified P4P.Proc.Lens                     as P
 
 import           Control.Lens                      (Lens', at, ix, sans, use,
-                                                    (%%=), (%%~), (%=), (%~),
-                                                    (.=), (^?), _Wrapped)
+                                                    (%%=), (%%~), (%=), (.=),
+                                                    (^?))
 import           Control.Lens.Extra                (unsafeIx, (%%=!), (%&&&%))
-import           Control.Monad                     (join, void, when)
+import           Control.Monad                     (void, when)
 import           Control.Monad.Extra               (whenJust)
 import           Control.Monad.Schedule            (tickTask)
 import           Control.Monad.Trans.Class         (lift)
 import           Control.Monad.Trans.Except        (runExceptT)
 import           Control.Monad.Trans.State.Strict  (StateT (..), execStateT,
-                                                    get, runState, state)
+                                                    get, modify, runState,
+                                                    state)
 import           Control.Monad.Trans.Writer.CPS    (WriterT, runWriterT, tell)
 import           Data.Bifunctor                    (first, second)
 import           Data.Foldable                     (for_, toList)
-import           Data.Function                     ((&))
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
 import           Data.Maybe                        (isNothing)
 import           Data.Tuple                        (swap)
-import           Data.Word                         (Word8)
 --import           Debug.Pretty.Simple               (pTraceShowId)
 import           Safe                              (fromJustNote)
 
@@ -121,15 +120,6 @@ statewT' f x = stateWT' f (pure . x)
 writeLog :: Monad m => KLogMsg -> StateT (State g) (WriterT [KadO] m) ()
 writeLog msg = lift $ tell [kLog msg]
 
-
-nodeUpdateAddr
-  :: Int -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo -> NodeLocalInfo
-nodeUpdateAddr maxSz tick addr nInfo = nInfo & _Wrapped . _niNodeAddr %~ update
- where
-  update =
-    snd . S.bStatePL ((==) addr . snd) (S.bPruneL maxSz . S.bSortBy compare) st
-  st (Just (tick', _)) = ((), Just (max tick tick', addr))
-  st Nothing           = ((), Just (tick, addr))
 
 kPutValue :: Key -> Value -> State drg -> (SC.TickDelta, State drg)
 kPutValue k v s0 = flip runState s0 $ do
@@ -194,59 +184,6 @@ kBucketBump n s0 = flip runStateWT s0 $ do
     (refresh', sched1) = SC.renew parIntvKBRefresh bRefresh sched0
     refresh = fromJustNote "bucket refresh had run w/o replacing..." refresh'
 
--- | Helper function for 'insertNodeId'
-bEntriesInsert
-  :: Word8
-  -> NodeId
-  -> NodeAddr
-  -> Either SC.Tick SC.Tick
-  -> Bool
-  -> KSeq (NodeLocalInfo, Maybe NodeLocalInfo)
-  -> ( Maybe NodeLocalInfo
-     , KSeq (NodeLocalInfo, Maybe NodeLocalInfo)
-     )
-bEntriesInsert parK nodeId srcAddr tick isPong e0 = flip runState e0 $ do
-  doPing <- state $ S.bStatePL (nodeMatch . fst) (S.bSortBy compare) $ \case
-    Just ent -> if isPong
-      then
-      -- "If the sending node already exists in the recipient’s k-bucket, the
-      -- recipient moves it to the tail of the list."
-      --
-      -- "[..] if the least-recently seen node responds [i.e. with Pong], it
-      -- is moved to the tail of the list, and the new sender’s contact is
-      -- discarded."
-           (False, Just (updateNodeAddr (fst ent), Nothing))
-      else (False, Just (first updateNodeAddr ent))
-    Nothing -> if not (S.lenBSeq e0 >= fromIntegral parK)
-      -- "If the node is not already in the appropriate k-bucket and the
-      -- bucket has fewer than k entries, then the recipient just inserts the
-      -- new sender at the tail of the list."
-      then (False, Just (updateNodeAddr newInfo, Nothing))
-      -- "If the appropriate k-bucket is full, however, then the recipient
-      -- pings the k-bucket’s least-recently seen node to decide what to do"
-      else (True, Nothing)
-
-  alreadyPending <- if not doPing
-    then pure Nothing
-    else state $ S.bStatePL (any nodeMatch . snd) id $ \case
-      -- Node already pending, bump its nodeAddr and return the corresponding
-      -- active node that is awaiting a ping, we may want to ping it again.
-      Just ent -> (Just (fst ent), Just (second (fmap updateNodeAddr) ent))
-      -- Node not pending, go to next block
-      Nothing  -> (Nothing, Nothing)
-
-  case alreadyPending of
-    Just nInfo -> pure (Just nInfo)
-    -- Node not pending, select the least-recently seen node with no pending
-    Nothing    -> state $ S.bStatePL (isNothing . snd) id $ \case
-      Just ent -> (Just (fst ent), Just (fst ent, Just newInfo))
-      -- No more pending spaces left, have to output nothing
-      Nothing  -> (Nothing, Nothing)
- where
-  nodeMatch      = (==) nodeId . nodeIdOf
-  newInfo        = newNodeLocalInfo nodeId tick srcAddr
-  updateNodeAddr = nodeUpdateAddr (fromIntegral parK) tick srcAddr
-
 insertNodeId
   :: (Monad m, R.DRG' g)
   => Maybe SC.Tick
@@ -255,7 +192,7 @@ insertNodeId
   -> NodeAddr
   -> State g
   -> m ([KadO], State g)
-insertNodeId rTick isPong nodeId srcAddr s0 = flip runStateWT s0 $ do
+insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
   -- I-update-k-bucket
   if nodeId == kSelf s0
     then do
@@ -264,19 +201,88 @@ insertNodeId rTick isPong nodeId srcAddr s0 = flip runStateWT s0 $ do
       -- we'll end up propagating it to others.
       _kOwnInfo %= updateNodeAddr
     else do
-      nodeToPing <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
-        bEntriesInsert parK nodeId srcAddr tick isPong
-      -- TODO: more sophistication with this behaviour:
+      r <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ bEntriesTryInsert
+      let (op, nodeToPing) = fromJustNote "unreachable" $ r
+      -- fromJust is safe: we checked nodeId == kSelf just above
+      -- FIXME: more sophistication with this behaviour:
       -- track the oreqRequest, cancel it if the node gets evicted in the meantime
-      whenJust (join nodeToPing) $ \nInfo -> do
+      whenJust nodeToPing $ \nInfo -> do
         stateWT $ oreqRequest (nodeInfoOf nInfo) Ping
+      writeLog $ I_KBucketOp op
  where
   State {..}   = s0
   KParams {..} = kParams
   tick         = case rTick of
     Just t  -> Right t
     Nothing -> Left (SC.tickNow kSchedule)
-  updateNodeAddr = nodeUpdateAddr (fromIntegral parK) tick srcAddr
+  updateNodeAddr = nodeUpdateAddr (fromIntegral parRepRouting) tick srcAddr
+  nodeMatch      = (==) nodeId . nodeIdOf
+  newInfo        = newNodeLocalInfo nodeId tick srcAddr
+
+  -- Try to insert a node address into a k-bucket, returning possibly an
+  -- existing node to ping, to maybe replace it with (if the ping fails).
+  bEntriesTryInsert e0 = flip runState e0 $ do
+    -- Is the node already in this k-bucket?
+    maybeOp <- state $ S.bStatePL (nodeMatch . fst) id $ \case
+        -- note, in this implementation we explicitly store the timestamp of each
+        -- node rather than "moving it to the tail".
+      Just ent -> if isReply
+        -- "If the sending node already exists in the recipient’s k-bucket, the
+        -- recipient moves it to the tail of the list."
+        --
+        -- "[..] if the least-recently seen node responds [i.e. with Pong], it
+        -- is moved to the tail of the list, and the new sender’s contact is
+        -- discarded."
+        then
+          -- fromJust is safe: isReply is only true if it matches an existing
+          -- pending Ping OReqRequest, which we do only in the outer function,
+          -- which we only do if we set (snd ent) to Just below.
+          ( Just $ KBucketNodePingCheckSuccess
+            (nodeIdOf (fromJustNote "reply without pending" $ snd ent))
+            nodeId
+          , Just (updateNodeAddr (fst ent), Nothing)
+          )
+        else
+          (Just $ KBucketNodeAlreadyIn nodeId, Just (first updateNodeAddr ent))
+      Nothing -> if not (S.lenBSeq e0 >= fromIntegral parRepRouting)
+        -- "If the node is not already in the appropriate k-bucket and the
+        -- bucket has fewer than k entries, then the recipient just inserts the
+        -- new sender at the tail of the list."
+        then
+          ( Just $ KBucketNodeInserted nodeId
+          , Just (updateNodeAddr newInfo, Nothing)
+          )
+        -- "If the appropriate k-bucket is full, however, then the recipient
+        -- pings the k-bucket’s least-recently seen node to decide what to do"
+        else (Nothing, Nothing)
+
+    case maybeOp of
+      Just op -> pure (op, Nothing)
+      Nothing -> do
+        -- Node not in this k-bucket, and potentially should be added
+        alreadyPending <- state $ S.bStatePL (any nodeMatch . snd) id $ \case
+          -- Node already pending, bump its nodeAddr and return the corresponding
+          -- active node that is awaiting a ping, we may want to ping it again.
+          Just ent -> (Just (fst ent), Just (second (fmap updateNodeAddr) ent))
+          -- Node not pending, go to next block
+          Nothing  -> (Nothing, Nothing)
+
+        case alreadyPending of
+          Just nInfo ->
+            pure (KBucketNodeAlreadyPending nodeId (nodeIdOf nInfo), Just nInfo)
+          Nothing -> do
+            -- Node not pending, select the least-recently seen node with no pending
+            modify $ S.bSortBy compare
+            state $ S.bStatePL (isNothing . snd) id $ \case
+              Just ent ->
+                ( ( KBucketNodePingCheckStart nodeId (nodeIdOf (fst ent))
+                  , Just (fst ent)
+                  )
+                , Just (fst ent, Just newInfo)
+                )
+              Nothing ->
+                -- No more pending spaces left, have to ignore
+                ((KBucketTotallyFullIgnoring nodeId, Nothing), Nothing)
 
 insertNodeIdTOReqPing
   :: Monad m => SC.Tick -> NodeId -> State g -> m ([KadO], State g)
@@ -291,24 +297,25 @@ insertNodeIdTOReqPing realNow nodeId s0 = flip runStateWT s0 $ do
   nodeMatch = (==) nodeId . nodeIdOf
   errmsg t = "insertNodeIdTOReqPing did not find " <> t <> " node"
 
+-- TODO: this should be removeable, only used in JoinNetwork
 insertNodes
   :: (Monad m, Traversable t, R.DRG' g)
   => t (NodeInfo NodeAddr)
   -> State g
   -> m ([KadO], State g)
-insertNodes nInfos s0 = flip runStateWT s0 $ do
+insertNodes nInfos = runStateWT $ do
   for_ nInfos $ \NodeInfo {..} -> do
     for_ niNodeAddr $ do
       stateWT . insertNodeId Nothing False niNodeId
 
 -- | Behaviour for updating k-buckets based on which nodes send stuff to us.
-kInsertNode
+kBucketMaint
   :: (R.DRG' g, Monad m)
   => KadI
   -> Maybe OReqProcess
   -> State g
   -> m ([KadO], State g)
-kInsertNode input oreqProc' = case input of
+kBucketMaint input oreqProc' = case input of
   P.MsgRT (P.RTTick realNow task) -> case task of
     TOOReq dst reqBody -> case reqBody of
       Ping -> insertNodeIdTOReqPing realNow dst
@@ -501,9 +508,6 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
                               }
 
     (ICLookingup key qs, ICReply repSrc (F.GotResult (ICGotNodes ni))) -> do
-      stateWT $ insertNodes ni
-
-      -- :^ not all of these will actually be kept in the k-buckets
       continueLookup key $ qs { sqAll  = niUnion (sqAll qs) (toNodeInfos' ni)
                               , sqOk   = M.insert repSrc () (sqOk qs)
                               , sqWait = Set.delete repSrc (sqWait qs)
@@ -547,8 +551,10 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
     (s, _) -> inputIgnored s
 
   continueLookup key qs = do
-    let (next, qs') =
-          kSimpleLookup (fromIntegral parAlpha) (fromIntegral parK) key qs
+    let (next, qs') = kSimpleLookup (fromIntegral parParallel)
+                                    (fromIntegral parRepRouting)
+                                    key
+                                    qs
     qStateSet $ ICLookingup key qs'
     case next of
       Left toQuery -> do
@@ -588,7 +594,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
           continueInsert v $ newSimpleQuery res
 
   continueInsert val qs = do
-    let (next, qs') = kSimpleInsert (fromIntegral parAlpha) qs
+    let (next, qs') = kSimpleInsert (fromIntegral parParallel) qs
     qStateSet $ ICInserting val qs'
     case next of
       Left toQuery -> do
@@ -755,7 +761,7 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
 
 Main entry point for this Kademlia protocol state-machine.
 
-Uses 'kInsertNode' and 'kHandleInput'.
+Uses 'kBucketMaint' and 'kHandleInput'.
 -}
 kInput :: (R.DRG' g, Monad m) => KadI -> State g -> m ([KadO], State g)
 kInput input s0 = flip runStateWT s0 $ do
@@ -773,7 +779,7 @@ kInput input s0 = flip runStateWT s0 $ do
     Just (dst, msg) | dst /= kSelf s0 -> do
       writeLog $ W_InvalidMessage msg "message with destination not ourselves"
     _ -> do
-      stateWT $ kInsertNode input oreqProc'
+      stateWT $ kBucketMaint input oreqProc'
       stateWT $ kHandleInput input oreqProc'
       whenJust maybePing $ stateWT . kInput
   where State {..} = s0

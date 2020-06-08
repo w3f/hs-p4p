@@ -156,7 +156,10 @@ main = do
   drg <- initializeFrom getEntropy
   let initXState = KSimState drg Nothing
 
-  getInput <- maybeTerminalGetInput "p4p" ".sim-kad_history" "p4p Kad> "
+  getInput <- maybeTerminalGetInput autoQuit
+                                    "p4p"
+                                    ".sim-kad_history"
+                                    "p4p Kad> "
   let joinStarted = \case
         KSimJoinStarted -> True
         _               -> False

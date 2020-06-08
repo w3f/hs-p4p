@@ -1,3 +1,5 @@
+- ! there is a memory leak with THUNK_2_0, run with ghc-prof
+
 - ! enforce the bounds on the bounded data structures
 
 - Check that we don't send requests to ourselves. Although it doesn't matter

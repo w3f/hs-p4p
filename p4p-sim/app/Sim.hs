@@ -59,7 +59,8 @@ withSimProto opt f = case simProto of
 -- run via stdin/stdout
 runStd :: SimOptions -> IO ExitCode
 runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
-  getInput <- maybeTerminalGetInput "p4p"
+  getInput <- maybeTerminalGetInput False
+                                    "p4p"
                                     ".sim_history"
                                     ("p4p " <> drop 5 (show simProto) <> "> ")
   let initPids  = mkInitPids opt

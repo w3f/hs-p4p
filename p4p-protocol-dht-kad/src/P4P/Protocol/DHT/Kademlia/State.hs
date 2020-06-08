@@ -23,7 +23,8 @@ import qualified Data.Vector                       as V
 
 import           Control.Applicative               (liftA2)
 import           Control.Lens                      (itraversed, ix, traversed,
-                                                    (%%@~), (%%~), (^?!))
+                                                    (%%@~), (%%~), (%~), (^?!),
+                                                    _Wrapped)
 import           Control.Lens.Extra                (unsafeIx)
 import           Control.Lens.TH                   (makeWrapped)
 import           Control.Lens.TH.Extra             (makeLenses_)
@@ -55,16 +56,18 @@ import           P4P.Protocol.DHT.Kademlia.Request
 data KParams = KParams
   { parH             :: !Word8
   -- ^ Number of bytes of a key, e.g. 32 for 256 bits.
-  , parK             :: !Word8
+  , parRepRouting    :: !Word8
   -- ^ Max-size of a k-bucket. From the paper:
   -- "k is chosen such that any given k nodes are very unlikely to fail within
   -- an hour of each other (for example k = 20)".
-  , parAlpha         :: !Word8
+  , parRepStorage    :: !Word8
+  -- ^ Storage replication factor. TODO: used in S-Kademlia, not yet implemented
+  , parAddrsPerNode  :: !Word8
+  -- ^ Max number of addresses to store for a node.
+  , parParallel      :: !Word8
   -- ^ Max number of outstanding outgoing requests used to serve each incoming
   -- request. From the paper:
   -- "alpha is a system-wide concurrency parameter, such as 3"
-  , parMaxAddr       :: !Word8
-  -- ^ Maximum number of addresses to store per node.
   --------
   , parMaxReqPerNode :: !Word16
   -- ^ Max number of outstanding outgoing or incoming requests per peer, for
@@ -115,9 +118,10 @@ parHBits KParams {..} = fromIntegral parH * 8
 
 defaultParams :: Int -> KParams
 defaultParams tickHz = KParams { parH             = 32
-                               , parK             = 32
-                               , parAlpha         = 4
-                               , parMaxAddr       = 16
+                               , parRepRouting    = 32
+                               , parRepStorage    = 16
+                               , parParallel      = 8
+                               , parAddrsPerNode  = 16
                                , parMaxReqPerNode = 256
                                , parMaxReqNodes   = 1024
                                , parMaxCmd        = 4096
@@ -136,6 +140,7 @@ defaultParams tickHz = KParams { parH             = 32
 defaultParams' :: KParams
 defaultParams' = defaultParams 1000
 
+-- FIXME: this probably wants to store tasks for the ping timeouts
 newtype NodeLocalInfo = NodeLocalInfo {
   getNodeInfo :: NodeInfo (Either SC.Tick SC.Tick, NodeAddr)
   -- ^ NodeInfo with its addresses and last-seen timestamps
@@ -163,6 +168,17 @@ nodeInfoOf (NodeLocalInfo nInfo) = fmap snd nInfo
 nodeLastSeen :: NodeLocalInfo -> (SC.Tick, NodeId)
 nodeLastSeen (NodeLocalInfo NodeInfo {..}) =
   (either id id $ maximumBound (Left 0) (fst <$> niNodeAddr), niNodeId)
+
+-- | Update one of the addresses in a 'NodeLocalInfo', possibly pruning some
+-- old addresses.
+nodeUpdateAddr
+  :: Int -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo -> NodeLocalInfo
+nodeUpdateAddr maxSz tick addr nInfo = nInfo & _Wrapped . _niNodeAddr %~ update
+ where
+  update x = snd
+    $ S.bStatePL ((==) addr . snd) (S.bPruneL maxSz . S.bSortBy compare) st x
+  st (Just (tick', _)) = ((), Just (max tick tick', addr))
+  st Nothing           = ((), Just (tick, addr))
 
 instance Ord NodeLocalInfo where
   compare = compare `on` nodeLastSeen
@@ -429,7 +445,7 @@ kGetNodes refNode s0 = do
     Just distancePrefix -> (distancePrefix, mempty)
   f accum i = do
     let bkt  = kBuckets ^?! ix i
-        want = fromIntegral parK - S.lenBSeq accum
+        want = fromIntegral parRepRouting - S.lenBSeq accum
     if want <= 0 || null (bEntries bkt)
       then accum
       else do

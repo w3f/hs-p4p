@@ -79,6 +79,7 @@ bStatePL
   -> (v, BSeq a)
 bStatePL p prune st = fmap (prune . BSeq) . statePL st p . unBSeq
 
+-- | Prune from the front
 bPruneL :: Int -> BSeq a -> BSeq a
 bPruneL maxSz xs =
   if lenBSeq xs > maxSz then bDrop (lenBSeq xs - maxSz) xs else xs

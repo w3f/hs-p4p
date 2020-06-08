@@ -74,10 +74,13 @@ setupReadlineHistory history = do
               (pure Nothing)
               (\s' -> addHistory s' >> hPutStrLn hist s' >> pure (Just s'))
 
--- | Set up a nice prompt if on a terminal, otherwise 'defaultGetInput'.
-maybeTerminalGetInput :: String -> String -> String -> IO (IO (Maybe String))
-maybeTerminalGetInput dirname filename prompt = do
-  queryTerminal stdInput >>= \case
+-- | Set up a nice prompt if on a terminal & not behaving automatically,
+-- otherwise 'defaultGetInput'.
+maybeTerminalGetInput
+  :: Bool -> String -> String -> String -> IO (IO (Maybe String))
+maybeTerminalGetInput auto dirname filename prompt = if auto
+  then pure defaultGetInput
+  else queryTerminal stdInput >>= \case
     False -> pure defaultGetInput
     True  -> do
       dir <- getXdgDirectory XdgData dirname
@@ -121,14 +124,15 @@ hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do
             -- https://github.com/simonmar/async/issues/113 for details.
             -- we have a safe version in 'foreverInterleave' in p4p-common but
             -- that carries additional overhead.
-            True -> fmap (either id id) $ race ui $ do
-              atomically (readTBQueue finished)
-              pure Nothing
-          isJoinStarted = \case
+            True -> do
+              fmap (either id id) $ race ui $ do
+                atomically (readTBQueue finished)
+                pure Nothing
+          isQuitMsg' = \case
             SimExtensionO m | isQuitMsg m -> True
             _                             -> False
           uo' outs = do
             uo outs
-            when (autoQuit && any isJoinStarted outs) $ do
+            when (autoQuit && any isQuitMsg' outs) $ do
               atomically $ writeTBQueue finished ()
       pure (ui', uo')

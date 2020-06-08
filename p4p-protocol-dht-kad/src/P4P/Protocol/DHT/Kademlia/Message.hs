@@ -191,6 +191,33 @@ data KProcess =
   | KPOReq !ReqId !RequestBody
     deriving (Show, Read, Generic, Eq, Ord)
 
+-- | Data structure summarising k-bucket operations
+data KBucketOp =
+    KBucketNodeInserted !NodeId
+    -- ^ We inserted a new node
+  | KBucketNodeAlreadyIn !NodeId
+    -- ^ We bumped the timestamp of a node already in our k-buckets
+  | KBucketNodeAlreadyPending !NodeId !NodeId
+    -- ^ We bumped the timestamp of a node already pending in our k-buckets.
+    -- The first param is the pending node, the second param is the existing
+    -- node being ping-checked.
+  | KBucketNodePingCheckStart !NodeId !NodeId
+    -- ^ We began a ping-check of a node, for a pending node.
+    -- The first param is the pending node, the second param is the existing
+    -- node being ping-checked.
+  | KBucketNodePingCheckSuccess !NodeId !NodeId
+    -- ^ A ping-check of a node succeeded, and we dropped a pending node.
+    -- The first param is the pending node, the second param is the existing
+    -- node being ping-checked.
+  | KBucketNodePingCheckFail !NodeId !NodeId
+    -- ^ A ping-check of a node failed, and we replaced it with a pending node.
+    -- The first param is the pending node, the second param is the existing
+    -- node being ping-checked.
+  | KBucketTotallyFullIgnoring !NodeId
+    -- ^ The k-bucket was completely full, even the pending spots, so we're
+    -- ignoring this node completely.
+    deriving (Show, Read, Generic, Eq, Ord)
+
 data KLogMsg =
     W_SelfCheckFailed !String
     -- ^ A self-check failed.
@@ -217,6 +244,8 @@ data KLogMsg =
     -- ^ Ignored a duplicate attempt to start a new kprocess.
   | I_KProcessDel !KProcess
     -- ^ A kprocess was deleted.
+  | I_KBucketOp !KBucketOp
+    -- ^ An operation was performed on our k-buckets.
   | D_ICmdOReqIgnoreDup !CmdId !ReqId !RequestBody
     -- ^ Ignored a duplicate attempt to expect an outgoing request.
     -- This suggests a minor programming error.
