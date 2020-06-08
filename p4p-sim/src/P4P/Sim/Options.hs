@@ -30,10 +30,6 @@ allOptions = enumFrom minBound
 helps :: [String] -> Mod f a
 helps strs = helpDoc $ Just $ extractChunk $ vsepChunks $ fmap paragraph strs
 
-data SimProto = ProtoEcho | ProtoKad
- deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
-makeLenses_ ''SimProto
-
 data SimLogging =
     LogNone
     -- ^ Log nothing
@@ -300,10 +296,7 @@ allActionOptions =
         )
 
 data SimOptions = SimOptions
-  { simProto        :: !SimProto
-  -- :^ protocol selector
-  -- this is the only thing that needs to be given in replay mode
-  , simInitNodes    :: !Int
+  { simInitNodes    :: !Int
   , simInitLatency  :: !SimLatency
   , simMsTick       :: !Integer
   -- :^ initial execution config, ignored during replay since it is read
@@ -320,22 +313,10 @@ data SimOptions = SimOptions
   deriving (Eq, Ord, Show, Read, Generic)
 makeLenses_ ''SimOptions
 
-protoOptions :: Parser SimProto
-protoOptions =
-  option auto
-    <| long "protocol"
-    <> short 'p'
-    <> metavar "Proto"
-    <> help ("Protocol to simulate, " <> showOptions @SimProto)
-    <> completeWith (show <$> allOptions @SimProto)
-    <> value ProtoEcho
-    <> showDefault
-
-simOptions :: Parser SimProto -> Parser SimOptions
-simOptions proto =
+simOptions :: Parser SimOptions
+simOptions =
   SimOptions
-    <$> proto
-    <*> (  option auto
+    <$> (  option auto
         <| long "num-nodes"
         <> short 'n'
         <> metavar "NUM"
@@ -419,21 +400,31 @@ simOptions proto =
         <> showDefault
         )
 
-parserInfo :: String -> String -> Parser SimOptions -> ParserInfo SimOptions
-parserInfo summary desc parser = info
+data SimXOptions xo = SimXOptions
+  { simOpts  :: !SimOptions
+  , simXOpts :: !xo
+  }
+  deriving (Eq, Ord, Show, Read, Generic)
+makeLenses_ ''SimXOptions
+
+simXOptions :: Parser xo -> Parser (SimXOptions xo)
+simXOptions xopts = SimXOptions <$> simOptions <*> xopts
+
+mkParser :: String -> String -> Parser opt -> ParserInfo opt
+mkParser summary desc parser = info
   (helper <*> parser)
   (fullDesc <> header summary <> progDesc desc <> failureCode 2)
 
-parseArgsIO :: ParserInfo SimOptions -> [String] -> IO SimOptions
+parseArgsIO :: ParserInfo opt -> [String] -> IO opt
 parseArgsIO parser args =
   execParserPure defaultPrefs parser args |> handleParseResult
 
-simParseOptions :: [String] -> IO SimOptions
-simParseOptions = parseArgsIO $ parserInfo
+simParseOptions :: Parser xo -> [String] -> IO (SimXOptions xo)
+simParseOptions xopts = parseArgsIO $ mkParser
   "sim - a simulator for p4p protocols"
   (  "Simulate a p4p protocol. Commands are given on stdin and replies "
   <> "are given on stdout. The syntax is $pid :~ $command where $pid "
   <> "and $command are Haskell Show/Read instance expressions, e.g. 0 :~ "
   <> "\"Hello, world!\". Give -v for more detailed output."
   )
-  (simOptions protoOptions)
+  (simXOptions xopts)

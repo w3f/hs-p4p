@@ -149,6 +149,8 @@ icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
   licmd . at_ cmdId %%=! \case
     Present cmdProc -> do
       -- duplicate Command
+      -- TODO(retry): should we resend below? we are doing so currently, but we
+      -- do assume Commands come in through a reliable channel
       let out = case (icmdResult cmdProc, icmdExternal cmdProc) of
             (Just reply, True) -> [cmdUserReply cmdId reply]
             _                  -> []

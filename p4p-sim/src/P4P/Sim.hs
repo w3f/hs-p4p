@@ -28,11 +28,15 @@ module P4P.Sim
   , runSimX
   , runSimXS
   -- * Options
+  , SimXOptions(..)
   , SimOptions(..)
   , parseArgsIO
-  , parserInfo
+  , mkParser
+  , simXOptions
   , simOptions
-  , SimProto(..)
+  , module Options.Applicative
+  , showOptions
+  , allOptions
   -- * IO and utilities
   , SimLog
   , SimReRe
@@ -45,8 +49,9 @@ module P4P.Sim
   )
 where
 
-import           Data.List.NonEmpty (NonEmpty (..))
+import           Data.List.NonEmpty  (NonEmpty (..))
 
+import           Options.Applicative
 import           P4P.Sim.Extension
 import           P4P.Sim.Internal
 import           P4P.Sim.IO

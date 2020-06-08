@@ -68,6 +68,13 @@ data Request = Request
   }
   deriving (Show, Read, Generic, Eq, Ord)
 
+-- | Width of a 'ReqId' and 'CmdId', in bytes.
+--
+-- This is based on the expected lifetime of these id values, 128 bits is not
+-- expected to be predictable in such a short timeframe.
+reqIdWith :: Int
+reqIdWith = 16
+
 data ReplyBody =
     Pong
   | GetNodeReply !NodeInfos
@@ -228,7 +235,7 @@ data KLogMsg =
   | W_ICmdIgnoredInvalidInput !CmdId !NodeId !ReplyBody
     -- ^ 'ICommand' ignored an invalid input.
     -- This means someone on the network is playing tricks with us.
-  | I_ICmdIgnoredInvalidInputGivenState !CmdId !NodeId !ReplyBody !(ICmdState () ())
+  | I_ICmdIgnoredInvalidInputForState !CmdId !NodeId !ReplyBody !(ICmdState () ())
     -- ^ 'ICommand' ignored an input which was invalid for the current state.
     -- This probably means the reply was slightly delayed, and not malicious.
   | I_ICmdStateChange !CmdId !(ICmdState () ())

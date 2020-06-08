@@ -23,14 +23,14 @@ smoke :: IO ()
 smoke = do
   let self = "00000000000000000000000000000000"
   let seed = BS.replicate 40 0
-  let s0 = newState self mempty seed defaultParams' :: State ChaChaDRG'
+  let s0 = newState self mempty seed (defaultParams 1000) :: State ChaChaDRG'
   r <- runExceptT $ checkState s0
   assertEqual "emptyState passed check" r (Right ())
   let res = kGetNodes self s0
   assertBool "lookup self doesn't work on empty state" $ null res
 
   -- test newNodeIdR, it's very fiddly
-  let idxes = fromIntegral <$> [0 .. pred (parHBits defaultParams')]
+  let idxes = fromIntegral <$> [0 .. pred (parKeyBits (defaultParams 1000))]
   (nIds, s1) <- flip runStateT s0 $ for idxes $ \idx -> do
     state $ \s -> newNodeIdR (kBucketIndexToPrefix idx s) s
   let idxes' = fmap (fromJust . (`kBucketGetIndex` s1)) nIds

@@ -6,6 +6,7 @@ module P4P.Protocol.DHT.Kademlia
   , KParams(..)
   , NodeInfo(..)
   , CmdId
+  , reqIdWith
   , Command(..)
   , CommandBody(..)
   , CommandReply(..)
@@ -23,7 +24,7 @@ module P4P.Protocol.DHT.Kademlia
   , KadI
   , KadO
   , defaultParams
-  , defaultParams'
+  , testingParams
   , newState
   , newRandomState
   -- from Internal

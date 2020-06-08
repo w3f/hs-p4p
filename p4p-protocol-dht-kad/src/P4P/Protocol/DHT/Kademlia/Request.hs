@@ -24,7 +24,6 @@ import           Control.Lens.Extra                (at_, (%%=!))
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad.Trans.State.Strict  (runState, state)
 import           Data.Map.Bounded                  (ValueAt (..))
-import           Data.Word                         (Word8)
 import           GHC.Generics                      (Generic)
 import           GHC.Stack                         (HasCallStack)
 
@@ -166,8 +165,8 @@ oreqIndex Msg {..} = case body of
   Right _            -> error "oreqMetadata: oreqMsg not a request"
   Left  Request {..} -> ((dst, reqBody), reqId)
 
-newReqId :: R.DRG' drg => Word8 -> drg -> (ReqId, drg)
-newReqId = R.randomBytesGenerate . fromIntegral
+newReqId :: R.DRG' drg => Int -> drg -> (ReqId, drg)
+newReqId = R.randomBytesGenerate
 
 {- | Run a new or existing 'OReqProcess' for the given outgoing request.
 
@@ -180,7 +179,7 @@ oreqEnsure
   -> Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> Lens' s (M.Map ReqId (NodeId, RequestBody))
-  -> (Word8, SC.TickDelta, SC.TickDelta)
+  -> (SC.TickDelta, SC.TickDelta)
   -> (SC.Tick -> Request -> Msg)
   -> NodeId
   -> RequestBody
@@ -195,7 +194,7 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
       error
         "oreqStart failed size check, programmer fail to give sufficiently-high rate limit"
     Absent True -> do
-      reqId <- ldrg %%= newReqId idWidth
+      reqId <- ldrg %%= newReqId reqIdWith
       now   <- SC.tickNow <$> use lsched
       let request = mkMsg now $ Request reqId reqBody
       lt  <- lsched %%= SC.after timeout (TOOReq reqDst reqBody)
@@ -208,8 +207,8 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
       loreqId . at reqId .= Just (reqDst, reqBody)
       pure ([P.MsgProc request, kLog $ I_KProcessNew kproc], Present oreqProc)
  where
-  (idWidth, timeout, timeoutRetry) = par
-  kproc                            = KPOReq reqDst reqBody
+  (timeout, timeoutRetry) = par
+  kproc                   = KPOReq reqDst reqBody
 
 {- | Finish an existing 'OReqProcess', after the timeout is complete.
 

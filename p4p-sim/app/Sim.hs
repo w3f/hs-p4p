@@ -29,6 +29,20 @@ import           P4P.Sim.Util              (ChaChaDRGInsecure, PMut',
 import           P4P.Sim.Util.IO           (maybeTerminalGetInput)
 
 
+data SimProto = ProtoEcho | ProtoKad
+ deriving (Eq, Ord, Show, Read, Bounded, Enum)
+
+protoOptions :: Parser SimProto
+protoOptions =
+  option auto
+    <| long "protocol"
+    <> short 'p'
+    <> metavar "Proto"
+    <> help ("Protocol to simulate, " <> showOptions @SimProto)
+    <> completeWith (show <$> allOptions @SimProto)
+    <> value ProtoEcho
+    <> showDefault
+
 data SProt ps where
   SEcho :: SProt EchoState
   SKad :: SProt (KState ChaChaDRGInsecure)
@@ -44,41 +58,42 @@ withSProt prot a = case prot of
 type SimC ps = (SimProcess (PMut' ps), SimLog ps (), SimReRe ps (), Proc ps)
 
 withSimProto
-  :: SimOptions
+  :: SimXOptions SimProto
   -> (forall ps . SimC ps => SProt ps -> (Pid -> IO ps) -> IO a)
   -> IO a
-withSimProto opt f = case simProto of
+withSimProto opt f = case simXOpts of
   ProtoEcho -> f SEcho $ \p -> pure (EState [p] 0)
   ProtoKad  -> f SKad $ \p -> do
-    let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick
+    let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick simOpts
         addr   = "addr:" <> show p
     newRandomState @ChaChaDRGInsecure getEntropy [addr] params
-  where SimOptions {..} = opt
+  where SimXOptions {..} = opt
 
 -- run via stdin/stdout
-runStd :: SimOptions -> IO ExitCode
+runStd :: SimXOptions SimProto -> IO ExitCode
 runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
   getInput <- maybeTerminalGetInput False
                                     "p4p"
                                     ".sim_history"
-                                    ("p4p " <> drop 5 (show simProto) <> "> ")
+                                    ("p4p " <> drop 5 (show simXOpts) <> "> ")
   let simUserIO = defaultSimUserIO @ps @() getInput
-  runSimIO @(PMut' ps) opt mkPS simUserIO >>= handleSimResult
-  where SimOptions {..} = opt
+  runSimIO @(PMut' ps) simOpts mkPS simUserIO >>= handleSimResult
+  where SimXOptions {..} = opt
 
 newtype UserSimAsync' ps = UserSimAsync' (UserSimAsync ps ())
 
 -- run via tb-queues, can be loaded from GHCI
-runTB :: SimOptions -> IO (DSum SProt UserSimAsync')
+runTB :: SimXOptions SimProto -> IO (DSum SProt UserSimAsync')
 runTB opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
-  let runSimIO' = runSimIO @(PMut' ps) opt mkPS
+  let runSimIO' = runSimIO @(PMut' ps) simOpts mkPS
   handles <- newSimAsync @(PMut' ps) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles
+  where SimXOptions {..} = opt
 
 main :: IO ()
 main =
   getArgs
-    >>= simParseOptions
+    >>= simParseOptions protoOptions
     -- "if True" avoids "unused" warnings for runTB
     >>= (if True then runStd else runTB >=> const (pure ExitSuccess))
     >>= exitWith

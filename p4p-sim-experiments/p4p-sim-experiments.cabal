@@ -70,6 +70,7 @@ Executable sim-kad
     , p4p-common
     , containers
     , lens
+    , op
     , transformers
   HS-Source-Dirs: app
   Main-Is: SimKad.hs

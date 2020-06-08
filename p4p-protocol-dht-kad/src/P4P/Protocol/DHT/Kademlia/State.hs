@@ -54,7 +54,7 @@ import           P4P.Protocol.DHT.Kademlia.Request
 
 
 data KParams = KParams
-  { parH             :: !Word8
+  { parKeyBytes      :: !Word8
   -- ^ Number of bytes of a key, e.g. 32 for 256 bits.
   , parRepRouting    :: !Word8
   -- ^ Max-size of a k-bucket. From the paper:
@@ -62,16 +62,16 @@ data KParams = KParams
   -- an hour of each other (for example k = 20)".
   , parRepStorage    :: !Word8
   -- ^ Storage replication factor. TODO: used in S-Kademlia, not yet implemented
-  , parAddrsPerNode  :: !Word8
-  -- ^ Max number of addresses to store for a node.
   , parParallel      :: !Word8
   -- ^ Max number of outstanding outgoing requests used to serve each incoming
   -- request. From the paper:
   -- "alpha is a system-wide concurrency parameter, such as 3"
+  , parAddrsPerNode  :: !Word8
+  -- ^ Max number of addresses to store for a node.
   --------
   , parMaxReqPerNode :: !Word16
   -- ^ Max number of outstanding outgoing or incoming requests per peer, for
-  -- rate-limiting. e.g. 256.
+  -- rate-limiting. e.g. 64.
   , parMaxReqNodes   :: !Word16
   -- ^ Max number of outstanding outgoing or incoming peers, for rate-limiting.
   -- e.g. 1024.
@@ -113,32 +113,35 @@ data KParams = KParams
   }
   deriving (Show, Read, Generic, Eq, Ord)
 
-parHBits :: KParams -> Int
-parHBits KParams {..} = fromIntegral parH * 8
+parKeyBits :: KParams -> Int
+parKeyBits KParams {..} = fromIntegral parKeyBytes * 8
+
+testingParams :: Int -> Int -> KParams
+testingParams speedAuto tickHz = KParams
+  { parKeyBytes      = 32
+  , parRepRouting    = 32
+  , parRepStorage    = 16
+  , parParallel      = 8
+  , parAddrsPerNode  = 16
+  , parMaxReqPerNode = 64
+  , parMaxReqNodes   = 1024
+  , parMaxCmd        = 4096
+  , parTOOReqRetry   = 1 * t
+  , parTOOReq        = 16 * t
+  , parTOIReq        = 16 * t
+  , parTOICmdOReq    = 16 * t
+  , parTOICmd        = 64 * t
+  , parIntvKBRefresh = 4096 * t `div` s
+  , parIntvValRepub  = 4096 * t `div` s
+  , parIntvValExpire = 262144 * t `div` s
+  , parIntvSelfCheck = 4096 * t `div` s
+  }
+ where
+  t = fromIntegral tickHz
+  s = fromIntegral speedAuto
 
 defaultParams :: Int -> KParams
-defaultParams tickHz = KParams { parH             = 32
-                               , parRepRouting    = 32
-                               , parRepStorage    = 16
-                               , parParallel      = 8
-                               , parAddrsPerNode  = 16
-                               , parMaxReqPerNode = 256
-                               , parMaxReqNodes   = 1024
-                               , parMaxCmd        = 4096
-                               , parTOOReqRetry   = 1 * t
-                               , parTOOReq        = 16 * t
-                               , parTOIReq        = 16 * t
-                               , parTOICmdOReq    = 16 * t
-                               , parTOICmd        = 256 * t
-                               , parIntvKBRefresh = 4096 * t
-                               , parIntvValRepub  = 4096 * t
-                               , parIntvValExpire = 262144 * t
-                               , parIntvSelfCheck = 4096 * t
-                               }
-  where t = fromIntegral tickHz
-
-defaultParams' :: KParams
-defaultParams' = defaultParams 1000
+defaultParams = testingParams 1
 
 -- FIXME: this probably wants to store tasks for the ping timeouts
 newtype NodeLocalInfo = NodeLocalInfo {
@@ -333,13 +336,14 @@ newState self addrs seed params = State
   }
  where
   KParams {..} = params
-  parHBits'    = parHBits params
+  parKeyBits'  = parKeyBits params
   ((refreshes, selfCheck), sched) =
     runIdentity $ flip runStateT SC.newSchedule $ liftA2
       (,)
-      (for (V.generate parHBits' id) $ \i -> do
+      (for (V.generate parKeyBits' id) $ \i -> do
         -- stagger the refreshes evenly
-        let t = parIntvKBRefresh * fromIntegral i `div` fromIntegral parHBits'
+        let t =
+              parIntvKBRefresh * fromIntegral i `div` fromIntegral parKeyBits'
         state $ SC.after t (RefreshBucket i)
       )
       (state $ SC.after 0 SelfCheck)
@@ -353,7 +357,7 @@ newRandomState
   -> f (State drg)
 newRandomState getEntropy addrs params =
   newState @BS.ByteString
-    <$> getEntropy (fromIntegral (parH params))
+    <$> getEntropy (fromIntegral (parKeyBytes params))
     <*> pure addrs
     <*> getEntropy (R.seedLength @drg)
     <*> pure params
@@ -361,7 +365,8 @@ newRandomState getEntropy addrs params =
 newCmdId :: R.DRG' drg => State drg -> (ReqId, State drg)
 newCmdId s@State {..} = (reqid, s { kRng = kRng' })
  where
-  (reqid, kRng') = R.randomBytesGenerate (fromIntegral (parH kParams)) kRng
+  (reqid, kRng') =
+    R.randomBytesGenerate (fromIntegral (parKeyBytes kParams)) kRng
 
 newNodeIdR :: R.DRG' drg => Int -> State drg -> (NodeId, State drg)
 newNodeIdR prefixMatching s0 = (nId, s1)
@@ -369,9 +374,9 @@ newNodeIdR prefixMatching s0 = (nId, s1)
   (rId, s1) = newCmdId s0
   mkMask p = replicate a maxBound <> m <> replicate b 0   where
     a = p `div` 8
-    r = (parHBits (kParams s0) - p) `rem` 8
+    r = (parKeyBits (kParams s0) - p) `rem` 8
     m = [ shiftL maxBound r | r /= 0 ]
-    b = (parHBits (kParams s0) - p) `div` 8
+    b = (parKeyBits (kParams s0) - p) `div` 8
   bs x b1 b2 = BS.pack $ BS.zipWith x b1 b2
   -- p 1s then 0s
   maskL = mkMask prefixMatching
@@ -396,11 +401,12 @@ kBucketGetNextIndex idx s0@State {..} =
 -- | If Nothing, means refNode == kSelf
 kBucketGetIndex :: NodeId -> State drg -> Maybe Int
 kBucketGetIndex refNode s0@State {..} =
-  let d = parHBits kParams - distanceLeadingZeros (distance refNode (kSelf s0))
+  let d = parKeyBits kParams
+        - distanceLeadingZeros (distance refNode (kSelf s0))
   in  if d == 0 then Nothing else Just (pred d)
 
 kBucketIndexToPrefix :: Int -> State drg -> Int
-kBucketIndexToPrefix idx s0@State {..} = parHBits kParams - succ idx
+kBucketIndexToPrefix idx s0@State {..} = parKeyBits kParams - succ idx
 
 -- | If result is Nothing, means refNode == kSelf
 kBucketModifyAtNode
@@ -431,11 +437,11 @@ kGetNodeInfo nodeId s0 = case kBucketGetIndex nodeId s0 of
 -- Results are sorted by distance to the given refNode, closest first.
 kGetNodes :: NodeId -> State drg -> KSeq (NodeInfo NodeAddr)
 kGetNodes refNode s0 = do
-  foldl' f base [start .. pred parHBits']
+  foldl' f base [start .. pred parKeyBits']
  where
   State {..}    = s0
   KParams {..}  = kParams
-  parHBits'     = parHBits kParams
+  parKeyBits'   = parKeyBits kParams
   (start, base) = case kBucketGetIndex refNode s0 of
     Nothing             -> (0, mempty)
     -- when joining the network we look up our own id and so it's important we

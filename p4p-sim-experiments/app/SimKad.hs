@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeApplications      #-}
@@ -19,6 +20,7 @@ import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State        (StateT (..), get, runState)
 import           Control.Monad.Trans.Writer.CPS   (WriterT, execWriterT)
 import           Control.Monad.Trans.Writer.Extra (tell1)
+import           Control.Op
 import           Crypto.Random.Extra              (initializeFrom,
                                                    randomBytesGenerate)
 import           Data.Foldable                    (for_)
@@ -50,11 +52,10 @@ type KProc = PMut' KS
 mkAddr :: Pid -> String
 mkAddr p = "addr:" <> show p
 
-mkPState :: SimOptions -> Pid -> IO KS
-mkPState opt p = do
-  let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick opt
-      addr   = mkAddr p
-  newRandomState @ChaChaDRGInsecure getEntropy [addr] params
+mkPState :: KParams -> Pid -> IO KS
+mkPState params p =
+  let addr = mkAddr p
+  in  newRandomState @ChaChaDRGInsecure getEntropy [addr] params
 
 data KSimState = KSimState
   { ksDRG     :: !ChaChaDRGInsecure
@@ -94,7 +95,7 @@ sendCommand
   -> CommandBody
   -> WriterT [Either (SimUserI KS) KSimO] (StateT KSimState m) ()
 sendCommand pid cmd = do
-  cId <- _ksDRG %%= randomBytesGenerate 32 -- FIXME: move this magic number into kad package
+  cId <- _ksDRG %%= randomBytesGenerate reqIdWith
   tell1 $ Left $ SimProcUserI pid $ Command cId cmd
 
 kSim
@@ -136,25 +137,73 @@ kSim input = execWriterT $ do
     _ -> pure ()
       -- TODO: WIP: more stuff, like random lookups & inserts
 
+kadOptions :: Parser (Int -> KParams)
+kadOptions =
+  mkParams
+    <$> (  option auto
+        <| long "x-kad-key-bytes"
+        <> help "Number of bytes of a key, e.g. 32 for 256 bits."
+        <> metavar "NUM"
+        <> value 32
+        <> showDefault
+        )
+    <*> (  option auto
+        <| long "x-kad-rep-routing"
+        <> help "Routing replication factor. i.e. Max-size of a k-bucket."
+        <> metavar "NUM"
+        <> value 32
+        <> showDefault
+        )
+    <*> (  option auto
+        <| long "x-kad-rep-storage"
+        <> help "Storage replication factor. TODO: not yet implemented."
+        <> metavar "NUM"
+        <> value 16
+        <> showDefault
+        )
+    <*> (  option auto
+        <| long "x-kad-parallel"
+        <> help "Max number of outstanding outgoing requests per query."
+        <> metavar "NUM"
+        <> value 8
+        <> showDefault
+        )
+    <*> (  option auto
+        <| long "x-kad-addrs-per-node"
+        <> help "Max number of addresses to store for a node"
+        <> metavar "NUM"
+        <> value 16
+        <> showDefault
+        )
+    <*> (  option auto
+        <| long "x-kad-speed-auto"
+        <> help "Speed up automatic behaviours e.g. refresh, for testing"
+        <> metavar "NUM"
+        <> value 1
+        <> showDefault
+        )
+ where
+  mkParams kb rr rs p apn t i = (testingParams t i) { parKeyBytes     = kb
+                                                    , parRepRouting   = rr
+                                                    , parRepStorage   = rs
+                                                    , parParallel     = p
+                                                    , parAddrsPerNode = apn
+                                                    }
+
 main :: IO ()
 main = do
-  let parser =
-        parserInfo "sim-kad" "kademlia test" (simOptions (pure ProtoKad))
-  opt <- parseArgsIO parser =<< getArgs
+  let parser = mkParser "sim-kad" "kademlia test" (simXOptions kadOptions)
+  SimXOptions {..} <- parseArgsIO parser =<< getArgs
 
   -- auto-join if we're
   --   - not reading input state
-  let autoJoin = case simIActRead (simIState (simIOAction opt)) of
+  let autoJoin = case simIActRead (simIState (simIOAction simOpts)) of
         Nothing -> True
         Just _  -> False
-
   -- auto-quit if we're perform an init-mode action. in this case, we will
   -- auto-join (i.e. send some messages), then write the output state to the
   -- specified input-state-file (if any), then quit
-  let (autoQuit, opt') = opt & _simIOAction %%~ delayedInitMode
-
-  drg <- initializeFrom getEntropy
-  let initXState = KSimState drg Nothing
+  let (autoQuit, simOpts') = simOpts & _simIOAction %%~ delayedInitMode
 
   getInput <- maybeTerminalGetInput autoQuit
                                     "p4p"
@@ -167,6 +216,7 @@ main = do
     hookAutoJoinQuit @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
       $ defaultSimUserIO @KS @KSimState getInput
 
+
 {-
 sim-kad: Safe.fromJustNote Nothing, insertNodeIdTOReqPing did not find pending node
 CallStack (from HasCallStack):
@@ -174,10 +224,13 @@ CallStack (from HasCallStack):
 1
 -- probably we didn't cancel a timeout when evicting a node
 -}
+  drg <- initializeFrom getEntropy
+  let initXState = KSimState drg Nothing
+  let params = simXOpts $ fromIntegral $ 1000 `div` simMsTick simOpts
   grunSimIO @KProc @KSimState (runSimXS @KProc @KSimState)
-                              opt'
+                              simOpts'
                               initXState
-                              (mkPState opt')
+                              (mkPState params)
                               simUserIO
     >>= handleSimResult
     >>= exitWith

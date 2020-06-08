@@ -467,12 +467,15 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
 
   inputIgnored s = do
     case (rep, input) of
-      (Just (F.GotResult r), ICReply repSrc (F.GotResult _)) ->
-        writeLog $ I_ICmdIgnoredInvalidInputGivenState cmdId
-                                                       repSrc
-                                                       r
-                                                       (icmdStateSummary s)
-      _ -> error "should not be ignoring this"
+      (Just (F.GotResult r), ICReply repSrc (F.GotResult _)) -> writeLog $ do
+        I_ICmdIgnoredInvalidInputForState cmdId repSrc r (icmdStateSummary s)
+      (Nothing, ICStart) -> pure ()
+      _ ->
+        error
+          $  "should not be ignoring this: "
+          <> show rep
+          <> "; input: "
+          <> show input
     pure Nothing
 
   finishWithResult r = do
@@ -634,7 +637,7 @@ oreqRequest nInfo reqBody s0 = flip runStateWT s0 $ do
  where
   State {..}   = s0
   KParams {..} = kParams
-  par          = (parH, parTOOReq, parTOOReqRetry)
+  par          = (parTOOReq, parTOOReqRetry)
   oreqEnsure'  = oreqEnsure _kRng _kSchedule _kSentReq _kSentReqId par
 
 {- | Make an outgoing request on behalf of the given 'ICmdProcess'.
