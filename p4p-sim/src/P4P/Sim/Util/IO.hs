@@ -2,35 +2,122 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 
-module P4P.Sim.Util.IO where
+module P4P.Sim.Util.IO
+  ( hookAutoJoinQuit
+  , maybeTerminalStdIO
+  , optionTerminalStdIO
+  , setupReadlineHistory
+  -- re-exports
+  , UE.bracket
+  , onExceptionShow
+  )
+where
 
 -- external
-import           Control.Monad                  (when)
+import           Control.Monad                  (forever, void, when)
 
 -- external, IO & system
-import           Control.Concurrent.Async       (race)
+import qualified UnliftIO.Exception             as UE (bracket)
+
+import           Control.Concurrent             (myThreadId, threadWaitRead)
+import           Control.Concurrent.Async       (async, cancel, link, race)
 import           Control.Concurrent.STM         (atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
 import           Control.Concurrent.STM.TVar    (newTVarIO, readTVarIO,
                                                  writeTVar)
+import           Control.Exception              (AsyncException (..),
+                                                 SomeException, catch,
+                                                 catchJust, throwIO, throwTo)
 import           Data.IORef                     (atomicModifyIORef, newIORef,
                                                  writeIORef)
-import           System.Console.Readline        (addHistory, readline)
+import           Foreign.C.String               (peekCString, withCString)
+import           Foreign.C.Types                (CChar, CInt (..))
+import           Foreign.Ptr                    (FunPtr, Ptr, freeHaskellFunPtr,
+                                                 nullPtr)
+import           GHC.IO.FD                      (FD (..))
+import           GHC.IO.Handle.FD               (handleToFd)
+import           System.Console.Readline        (addHistory, callbackReadChar,
+                                                 clearMessage, resetLineState)
 import           System.Directory               (XdgDirectory (..),
                                                  createDirectoryIfMissing,
                                                  getXdgDirectory)
 import           System.IO                      (BufferMode (..), IOMode (..),
                                                  hGetLine, hIsEOF, hPutStrLn,
                                                  hSetBuffering, openFile,
-                                                 stderr)
+                                                 stderr, stdin)
 import           System.Posix.IO                (stdInput)
+import           System.Posix.Signals           hiding (Handler)
 import           System.Posix.Terminal          (queryTerminal)
+import           System.Posix.Types             (Fd (..))
 
 -- internal
 import           P4P.Sim.IO
+import           P4P.Sim.Options
 import           P4P.Sim.Types
 
+
+-- TODO: export to upstream readline
+type Handler = Ptr CChar -> IO ()
+-- fixes NULL segfault
+callbackHandlerInstall' :: String -> (Maybe String -> IO ()) -> IO (IO ())
+callbackHandlerInstall' prompt lhandler = do
+  lhandlerPtr <- exportHandler $ \linePtr -> if nullPtr == linePtr
+    then lhandler Nothing
+    else peekCString linePtr >>= lhandler . Just
+  withCString prompt $ \promptPtr -> do
+    rl_callback_handler_install promptPtr lhandlerPtr
+  return
+    (do
+      rl_callback_handler_remove
+      freeHaskellFunPtr lhandlerPtr
+    )
+foreign import ccall "wrapper"
+  exportHandler :: Handler -> IO (FunPtr Handler)
+foreign import ccall unsafe "rl_callback_handler_install"
+  rl_callback_handler_install :: Ptr CChar -> FunPtr Handler -> IO ()
+foreign import ccall unsafe "rl_callback_handler_remove"
+  rl_callback_handler_remove :: IO ()
+
+clearVisibleLine :: IO ()
+clearVisibleLine = void rl_clear_visible_line
+foreign import ccall unsafe "rl_clear_visible_line"
+  rl_clear_visible_line :: IO CInt
+
+newPromptLine :: IO ()
+newPromptLine = do
+  clearVisibleLine
+  resetLineState
+  clearMessage
+
+ghcNoKillOn2CtrlC :: IO ()
+ghcNoKillOn2CtrlC = do
+  -- https://stackoverflow.com/a/7941166
+  tid <- myThreadId
+  _ <- installHandler keyboardSignal (Catch (throwTo tid UserInterrupt)) Nothing
+  pure ()
+
+onExceptionShow :: String -> IO a -> IO a
+onExceptionShow tag io = catch
+  io
+  (\e ->
+    hPutStrLn stderr (tag <> ": " <> show e) >> throwIO (e :: SomeException)
+  )
+
+-- | Ignore user interrupts, by running the action again when an interrupt
+-- happens. This should be a small action like reading from something.
+ignoreUserInterrupt :: IO a -> IO a
+ignoreUserInterrupt io = do
+  r <- catchJust f (Just <$> io) $ \e -> do
+    putStrLn $ "\nUserInterrupt"
+    newPromptLine
+    pure Nothing
+  case r of
+    Nothing -> ignoreUserInterrupt io
+    Just r' -> pure r'
+ where
+  f e@UserInterrupt = Just e
+  f _               = Nothing
 
 -- | Load & save history to/from a file.
 --
@@ -74,22 +161,48 @@ setupReadlineHistory history = do
               (pure Nothing)
               (\s' -> addHistory s' >> hPutStrLn hist s' >> pure (Just s'))
 
--- | Set up a nice prompt if on a terminal & not behaving automatically,
--- otherwise 'defaultGetInput'.
-maybeTerminalGetInput
-  :: Bool -> String -> String -> String -> IO (IO (Maybe String))
-maybeTerminalGetInput auto dirname filename prompt = if auto
-  then pure defaultGetInput
-  else queryTerminal stdInput >>= \case
-    False -> pure defaultGetInput
-    True  -> do
+-- | Set up a nice prompt if on a terminal, otherwise 'defaultStdIO'.
+maybeTerminalStdIO :: Bool -> String -> String -> String -> IO (StdIO, IO ())
+maybeTerminalStdIO interactive dirname filename prompt = do
+  queryTerminal stdInput >>= \case
+    True | interactive -> do
       dir <- getXdgDirectory XdgData dirname
       createDirectoryIfMissing True dir
       let history = dir <> "/" <> filename
       maybeAddHistory <- setupReadlineHistory history
-      pure $ readline prompt >>= \case
-        Nothing -> hPutStrLn stderr "" >> pure Nothing
-        Just s  -> maybeAddHistory s >> pure (Just s)
+
+      -- readline BS below
+      -- we have to use the async API because the sync API can't be interrupted
+      -- and therefore doesn't interact well with exceptions in other threads
+      ghcNoKillOn2CtrlC
+      input <- newTBQueueIO 1
+      hSetBuffering stdin NoBuffering
+      cleanup <- callbackHandlerInstall' prompt $ \s -> do
+        atomically $ writeTBQueue input s
+      fd <- handleToFd stdin
+      a <- async $ forever $ do
+        threadWaitRead $ Fd $ fdFD fd
+        callbackReadChar
+      link a
+      let i = ignoreUserInterrupt $ do
+            atomically (readTBQueue input) >>= \case
+              Nothing -> hPutStrLn stderr "" >> pure Nothing
+              Just s  -> maybeAddHistory s >> pure (Just s)
+      let o s = do
+            clearVisibleLine
+            putStrLn $ "\r\x1b[0K" <> s
+            newPromptLine
+      let f = do
+            cancel a
+            cleanup
+            newPromptLine
+            putStrLn ""
+      pure ((i, o), f)
+    _ -> pure (defaultStdIO, pure ())
+
+optionTerminalStdIO
+  :: SimOptions -> String -> String -> String -> IO (StdIO, IO ())
+optionTerminalStdIO opt = maybeTerminalStdIO (isInteractiveMode opt)
 
 {- | Convert a 'SimUserIO' to have auto-join and auto-quit behaviour.
 
@@ -110,9 +223,6 @@ hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do
   if not autoJoin && not autoQuit
     then pure (ui, uo)
     else do
-      -- by design principle, processes are meant to be suspended at any time,
-      -- and so they have no explicit awareness of when they are started or
-      -- stopped. so we have this slight hack to support autoJoin/autoQuit
       started  <- newTVarIO False
       finished <- newTBQueueIO 1
       let ui' = readTVarIO started >>= \case

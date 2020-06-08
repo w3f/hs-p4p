@@ -26,7 +26,7 @@ import           P4P.Sim.EchoProcess       (EchoState (..))
 import           P4P.Sim.Options           (simParseOptions)
 import           P4P.Sim.Util              (ChaChaDRGInsecure, PMut',
                                             getEntropy)
-import           P4P.Sim.Util.IO           (maybeTerminalGetInput)
+import           P4P.Sim.Util.IO           (bracket, optionTerminalStdIO)
 
 
 data SimProto = ProtoEcho | ProtoKad
@@ -72,12 +72,11 @@ withSimProto opt f = case simXOpts of
 -- run via stdin/stdout
 runStd :: SimXOptions SimProto -> IO ExitCode
 runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
-  getInput <- maybeTerminalGetInput False
-                                    "p4p"
-                                    ".sim_history"
-                                    ("p4p " <> drop 5 (show simXOpts) <> "> ")
-  let simUserIO = defaultSimUserIO @ps @() getInput
-  runSimIO @(PMut' ps) simOpts mkPS simUserIO >>= handleSimResult
+  let prompt  = "p4p " <> drop 5 (show simXOpts) <> "> "
+  let mkStdIO = optionTerminalStdIO simOpts "p4p" ".sim_history" prompt
+  bracket mkStdIO snd $ \(stdio, _) -> do
+    let simUserIO = defaultSimUserIO @ps @() stdio
+    runSimIO @(PMut' ps) simOpts mkPS simUserIO >>= handleSimResult
   where SimXOptions {..} = opt
 
 newtype UserSimAsync' ps = UserSimAsync' (UserSimAsync ps ())

@@ -17,8 +17,9 @@ module P4P.Proc
   , ProcMsgI
   , ProcMsgO
   , reactAllM
-  , reactWithIO
   , asState
+  , ProcEnv(..)
+  , reactEnv
   -- instances
   , PRef(..)
   , PMut(..)

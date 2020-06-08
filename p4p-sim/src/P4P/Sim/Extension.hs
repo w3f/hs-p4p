@@ -15,13 +15,12 @@ module P4P.Sim.Extension where
 -- external
 import           Control.Lens.Mutable.Extra       (Const (..), FakeAlloc2 (..),
                                                    SNat, newFakeAlloc2)
-import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import           Data.Functor                     (($>))
-import           Data.Schedule                    (Tick)
 import           Data.Void                        (absurd)
 import           P4P.Proc                         (PRef, Proc (..),
-                                                   Process (..), Protocol (..))
+                                                   ProcEnv (..), Process (..),
+                                                   Protocol (..))
 import           P4P.Proc.Util                    (Can (..), knot2UReactM)
 
 -- internal
@@ -93,8 +92,7 @@ runSimX
   => Monad m
   => SimXProcess p x
   => Ctx x (StateT (FakeAlloc2 (SimRunState p) xs_) m)
-  => m (Maybe (SimXI (State p) (State x)))
-  -> (Tick -> [SimXO (State p) (State x)] -> m ())
+  => ProcEnv (SimFullState (State p) (State x)) m
   -> SimFullState (State p) (State x)
   -> m (SimFullState (State p) (State x))
 {- API note:
@@ -123,10 +121,9 @@ of how PSim is implemented... ugh
 Happily, runSimXS itself doesn't contain this fugliness and its API is clean.
 However it only works on extension processes implemented as a pure Proc.
 -}
-runSimX simRunI simRunO s0 =
+runSimX env s0 =
   simulate @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
-      (lift simRunI)
-      ((lift .) . simRunO)
+      (liftEnv env)
       s0
     `evalStateT` newFakeAlloc2
 
@@ -138,8 +135,7 @@ runSimXS
   => Monad m
   => SimXProtocol (State p) xs
   => Proc xs
-  => m (Maybe (SimXI (State p) xs))
-  -> (Tick -> [SimXO (State p) xs] -> m ())
+  => ProcEnv (SimFullState (State p) xs) m
   -> SimFullState (State p) xs
   -> m (SimFullState (State p) xs)
 runSimXS =

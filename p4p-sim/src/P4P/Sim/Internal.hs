@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE LambdaCase           #-}
+{-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE RecordWildCards      #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TupleSections        #-}
@@ -40,11 +41,11 @@ import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
 import           Data.Schedule                    (Tick, TickDelta, whileJustM)
 import           Data.Traversable                 (for)
-import           P4P.Proc                         (GMsg (..), GMsgI, GMsgO,
-                                                   ProcAddr, ProcMsgI,
+import           P4P.Proc                         (GMsg (..), ProcAddr,
+                                                   ProcEnv (..), ProcMsgI,
                                                    Process (..), ProtoMsg (..),
                                                    RuntimeI (..), RuntimeO (..),
-                                                   asState, reactWithIO)
+                                                   asState, reactEnv)
 import           Safe                             (headNote)
 
 -- internal
@@ -277,11 +278,27 @@ instance (
 simulate
   :: forall p m
    . (Process p, Monad m, Ctx p m)
-  => m (Maybe (GMsgI (State p)))
-  -> (Tick -> [GMsgO (State p)] -> m ())
+  => ProcEnv (State p) m
   -> State p
   -> m (State p)
-simulate simRunI simRunO = fmap snd . asState (reactWithIO @p simRunI simRunO)
+simulate env = fmap snd . asState (reactEnv @p env)
+
+liftEnv
+  :: forall ps st m . Monad m => ProcEnv ps m -> ProcEnv ps (StateT st m)
+liftEnv env = ProcEnv { envGuard = guard
+                      , envI     = lift envI
+                      , envO     = (lift .) . envO
+                      }
+ where
+  ProcEnv {..} = env
+  -- from https://hackage.haskell.org/package/exceptions-0.10.4/docs/src/Control.Monad.Catch.html#line-428
+  guard
+    :: ((forall a . StateT s m a -> StateT s m a) -> StateT s m b)
+    -> StateT s m b
+  guard a = StateT $ \s -> envGuard $ \u -> runStateT (a $ q u) s
+   where
+    q :: (m (a, s) -> m (a, s)) -> StateT s m a -> StateT s m a
+    q u (StateT b) = StateT (u . b)
 
 -- note: @p@ here does refer to the process type of individual processes
 runSim
@@ -289,13 +306,9 @@ runSim
    . SimProcess p
   => Ctx p m
   => Monad m
-  => m (Maybe (SimI (State p)))
-  -> (Tick -> [SimO (State p)] -> m ())
+  => ProcEnv (SimFullState (State p) ()) m
   -> SimFullState (State p) ()
   -> m (SimFullState (State p) ())
-runSim simRunI simRunO s0 =
-  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p)
-      (lift simRunI)
-      ((lift .) . simRunO)
-      s0
+runSim env s0 =
+  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p) (liftEnv env) s0
     `evalStateT` newFakeAlloc1

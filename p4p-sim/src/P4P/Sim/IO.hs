@@ -14,7 +14,7 @@ module P4P.Sim.IO where
 import qualified Data.Map.Strict                as M
 import qualified Data.Set                       as S
 
-import           Control.Clock                  (Clock (..), Clocked (..))
+import           Control.Clock                  (Clocked (..))
 import           Control.Monad                  (forever, join, void, when)
 import           Control.Monad.Extra            (whenJust)
 import           Control.Op
@@ -26,13 +26,14 @@ import           Data.Maybe                     (fromMaybe, mapMaybe)
 import           Data.Schedule                  (Tick)
 import           Data.Traversable               (for)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
-                                                 Process (..), Protocol (..),
-                                                 RuntimeI (..))
+                                                 ProcEnv (..), Process (..),
+                                                 Protocol (..), RuntimeI (..))
 import           Safe                           (readNote)
 import           Text.Read                      (readEither)
 
 -- external, IO
-import           Control.Clock.IO               (Intv (..), interval, newClock)
+import           Control.Clock.IO               (Intv (..), clockWithIO,
+                                                 interval, newClock)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
                                                  wait)
 import           Control.Concurrent.Async.Extra (foreverInterleave)
@@ -55,7 +56,7 @@ import           System.IO                      (BufferMode (..), Handle,
                                                  openFile, stderr, stdin)
 import           System.IO.Error                (catchIOError, isEOFError)
 import           Text.Pretty.Simple             (pHPrint)
-import           UnliftIO.Exception             (bracket)
+import           UnliftIO.Exception             (bracket, mask)
 
 -- internal
 import           P4P.Sim.Extension
@@ -64,7 +65,8 @@ import           P4P.Sim.Options                (SimIAction (..),
                                                  SimIOAction (..),
                                                  SimLogging (..),
                                                  SimOAction (..),
-                                                 SimOptions (..))
+                                                 SimOptions (..),
+                                                 isInteractiveMode)
 import           P4P.Sim.Types
 
 
@@ -162,6 +164,7 @@ type SimUserIO ps xs
 type UserSimIO ps xs = (Maybe (SimXUserI ps xs) -> IO (), IO [SimXUserO ps xs])
 type UserSimSTM ps xs
   = (Maybe (SimXUserI ps xs) -> STM (), STM [SimXUserO ps xs])
+type StdIO = (IO (Maybe String), String -> IO ())
 
 data UserSimAsync ps xs = UserSimAsync
   { simWI         :: !(Maybe (SimXUserI ps xs) -> IO ())
@@ -170,11 +173,11 @@ data UserSimAsync ps xs = UserSimAsync
   , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
   }
 
-defaultGetInput :: IO (Maybe String)
-defaultGetInput = hGetLineOrEOF stdin
+defaultStdIO :: StdIO
+defaultStdIO = (hGetLineOrEOF stdin, putStrLn)
 
-defaultSimUserIO :: SimReRe ps xs => IO (Maybe String) -> SimUserIO ps xs
-defaultSimUserIO getInput =
+defaultSimUserIO :: SimReRe ps xs => StdIO -> SimUserIO ps xs
+defaultSimUserIO (getInput, doOutput) =
   -- support special "pid :~ msg" syntax for SimProcUserI / SimProcUserO
   let i = untilJustM $ getInput >>= \case
         Nothing -> pure (Just Nothing) -- EOF, quit
@@ -184,12 +187,12 @@ defaultSimUserIO getInput =
             Right (pid :~ ui) -> pure (Just (Just (SimProcUserI pid ui)))
             Left  _           -> case readEither s of
               Right r -> pure (Just (Just r))
-              Left  e -> putStrLn e >> pure Nothing
+              Left  e -> doOutput e >> pure Nothing
                 -- TODO: add some help text, ideally with some introspection
                 -- that prints out some generated concrete examples
       o = \case
-        SimProcUserO pid uo -> print $ pid :~ uo
-        x                   -> print x
+        SimProcUserO pid uo -> doOutput $ show $ pid :~ uo
+        x                   -> doOutput $ show x
   in  (i, traverse_ o)
 
 -- | SimUserIO that reads/writes from TBQueues.
@@ -317,11 +320,12 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 
   (simI, simIClose) <- case simIActRead simIMsg of
     Nothing -> do
-      simClock <- newClock initTick (interval picosPerTick Ps)
-      clkEnvI  <- clockWith simClock simUserI
-      pure (runClocked clkEnvI >$> c2i, finClocked clkEnvI)
+      simClock    <- newClock initTick (interval picosPerTick Ps)
+      Clocked r f <- clockWithIO simClock simUserI
+      pure $ (r >$> c2i, f)
     Just h -> do
-      pure (hGetLineOrEOF h >$> fmap (readNote "simIMsg read"), pure ())
+      let input = hGetLineOrEOF h >$> fmap (readNote "simIMsg read")
+      pure $ (input, pure ())
 
   simErrors <- newTVarIO []
 
@@ -368,8 +372,7 @@ grunSimIO
   :: forall p xs
    . SimLog (State p) xs
   => SimReRe (State p) xs
-  => (  IO (Maybe (SimXI (State p) xs))
-     -> (Tick -> [SimXO (State p) xs] -> IO ())
+  => (  ProcEnv (SimFullState (State p) xs) IO
      -> SimFullState (State p) xs
      -> IO (SimFullState (State p) xs)
      )
@@ -393,11 +396,37 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
       Just h -> hGetLine h >$> readNote "simIState read"
     whenJust (simIActWrite simIState) $ flip hPutStrLn (show ifs)
 
+    {-
+    TODO: this is a hack that prevents ctrl-c from quitting the program in
+    interactive mode, similar to the behaviour of other REPLs. Without this, it
+    is possible for ctrl-c to quit the program if the user is quick and gives
+    the signal *in between* calls to libreadline, since we only ignore
+    UserInterrupt during those calls when it is interrupted.
+
+    However the way this is implemented is a bit shitty, as it prevents a user
+    from aborting an computation in interactive mode. (This is possible in
+    other REPLs). Not that this matters for a network simulator where things
+    are IO-bound not CPU-bound, but ideally we'd abort the current computation
+    and rewind the state back to the end of the previous computation. That's
+    hard since we support fake-pure impure 'Process' (we'd have to @suspend@
+    and @proceed@ in between every input, for all processes being simulated),
+    but would be easy if we only supported 'Proc'.
+
+    In non-interactive mode, nothing is changed and the user can abort whenever
+    they want, as expected. This exits the program so we don't need to worry
+    about restoring previous state, etc.
+    -}
+    let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
+        guard act = if isInteractiveMode opt
+          then mask $ \_ -> act id -- guard masks, unguard doesn't restore
+          else act id -- guard does nothing, no mask to restore
+
     let realNow = simNow (simState ifs)
         mkRT    = defaultRT @_ @xs opt realNow simUserIO simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
+      let env = ProcEnv guard simRunI simRunO
       when simDbgPprState $ pHPrint stderr ifs
-      ofs <- lrunSim simRunI simRunO ifs
+      ofs <- lrunSim env ifs
       when simDbgPprState $ pHPrint stderr ofs
 
       let t = simNow (simState ofs)

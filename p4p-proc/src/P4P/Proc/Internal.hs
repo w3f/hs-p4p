@@ -1,6 +1,8 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TypeFamilies      #-}
 
 -- GHC bug, default implementations for a class includes subclass constraint
@@ -209,21 +211,6 @@ reactAllM
   :: (Process p, Ctx p m, Monad m) => p -> [ProcMsgI p] -> m [ProcMsgO p]
 reactAllM p pinputs = pinputs >$> reactM p |> sequence >$> join
 
--- | React to inputs, and handle outputs, with the given actions.
-reactWithIO
-  :: (Process p, Monad m, Ctx p m)
-  => m (Maybe (GMsgI (State p)))
-  -> (Tick -> [GMsgO (State p)] -> m ())
-  -> p
-  -> m ()
-reactWithIO simRunI simRunO proc = void $ whileJustM $ do
-  realNow <- localNowM proc
-  -- we tick over after handling RTTick, so use realNow from before handling it
-  (simRunI >>=) $ traverse $ \i -> do
-    outs <- reactM proc i
-    simRunO realNow outs
-    pure ()
-
 -- | Run some operation on a process, as a state transition on its state.
 asState
   :: (Process p, Ctx p m, Monad m) => (p -> m a) -> State p -> m (a, State p)
@@ -232,3 +219,24 @@ asState runProcess pstate = do
   r <- runProcess p
   s <- suspend p
   pure (r, s)
+
+-- | Simple model of a process environment, for 'reactEnv'.
+data ProcEnv ps m = ProcEnv
+  { envGuard :: !(forall b. ((forall a. m a -> m a) -> m b) -> m b)
+  -- ^ Custom guard function, e.g. 'Control.Exception.mask' or something else.
+  , envI     :: !(m (Maybe (GMsgI ps)))
+  -- ^ Get an input, or EOF.
+  , envO     :: !(Tick -> [GMsgO ps] -> m ())
+  -- ^ Deal with a batch of outputs.
+  }
+
+-- | React to inputs, and handle outputs, with the given actions.
+reactEnv :: (Process p, Monad m, Ctx p m) => ProcEnv (State p) m -> p -> m ()
+reactEnv ProcEnv {..} proc = void $ envGuard $ \unguard ->
+  whileJustM $ unguard $ do
+    realNow <- localNowM proc
+    -- we tick over after handling RTTick, so use realNow from before handling it
+    (envI >>=) $ traverse $ \i -> do
+      outs <- reactM proc i
+      envO realNow outs
+      pure ()

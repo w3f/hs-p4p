@@ -313,6 +313,11 @@ data SimOptions = SimOptions
   deriving (Eq, Ord, Show, Read, Generic)
 makeLenses_ ''SimOptions
 
+isInteractiveMode :: SimOptions -> Bool
+isInteractiveMode opt = case simIActRead (simIMsg (simIOAction opt)) of
+  Nothing -> True
+  Just _  -> False
+
 simOptions :: Parser SimOptions
 simOptions =
   SimOptions

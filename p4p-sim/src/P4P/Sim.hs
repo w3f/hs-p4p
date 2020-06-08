@@ -41,6 +41,7 @@ module P4P.Sim
   , SimLog
   , SimReRe
   , defaultSimUserIO
+  , defaultStdIO
   , grunSimIO
   , runSimIO
   , handleSimResult
