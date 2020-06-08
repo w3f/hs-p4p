@@ -39,7 +39,7 @@ import           P4P.Sim.Options                  (SimIAction (..),
                                                    delayedInitMode,
                                                    _simIOAction)
 import           P4P.Sim.Util                     (ChaChaDRGInsecure, PMut',
-                                                   Pid, getEntropy, mkInitPids)
+                                                   getEntropy)
 import           P4P.Sim.Util.IO                  (hookAutoJoinQuit,
                                                    maybeTerminalGetInput)
 
@@ -73,11 +73,11 @@ makeLenses_ ''KSimO
 
 instance Protocol KSimState where
   type PMsg KSimState = Void
-  type UserI KSimState = Either (SimUserO Pid KS) KSimI
-  type UserO KSimState = Either (SimUserI Pid KS) KSimO
+  type UserI KSimState = Either (SimUserO KS) KSimI
+  type UserO KSimState = Either (SimUserI KS) KSimO
   type AuxO KSimState = Void
 
-instance SimXProtocol Pid KS KSimState where
+instance SimXProtocol KS KSimState where
   type XUserI KSimState = KSimI
   type XUserO KSimState = KSimO
 
@@ -92,15 +92,15 @@ sendCommand
   :: Monad m
   => Pid
   -> CommandBody
-  -> WriterT [Either (SimUserI Pid KS) KSimO] (StateT KSimState m) ()
+  -> WriterT [Either (SimUserI KS) KSimO] (StateT KSimState m) ()
 sendCommand pid cmd = do
   cId <- _ksDRG %%= randomBytesGenerate 32 -- FIXME: move this magic number into kad package
   tell1 $ Left $ SimProcUserI pid $ Command cId cmd
 
 kSim
   :: Monad m
-  => Either (SimUserO Pid KS) KSimI
-  -> StateT KSimState m [Either (SimUserI Pid KS) KSimO]
+  => Either (SimUserO KS) KSimI
+  -> StateT KSimState m [Either (SimUserI KS) KSimO]
 kSim input = execWriterT $ do
   ks <- lift get
   case (ksJoining ks, input) of
@@ -164,8 +164,8 @@ main = do
         KSimJoinStarted -> True
         _               -> False
   simUserIO <-
-    hookAutoJoinQuit @_ @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
-      $ defaultSimUserIO @_ @KS @KSimState getInput
+    hookAutoJoinQuit @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
+      $ defaultSimUserIO @KS @KSimState getInput
 
 {-
 sim-kad: Safe.fromJustNote Nothing, insertNodeIdTOReqPing did not find pending node
@@ -174,11 +174,10 @@ CallStack (from HasCallStack):
 1
 -- probably we didn't cancel a timeout when evicting a node
 -}
-  grunSimIO @_ @KProc @KSimState (runSimXS @_ @KProc @KSimState)
-                                 opt'
-                                 initXState
-                                 (mkInitPids opt')
-                                 (mkPState opt')
-                                 simUserIO
+  grunSimIO @KProc @KSimState (runSimXS @KProc @KSimState)
+                              opt'
+                              initXState
+                              (mkPState opt')
+                              simUserIO
     >>= handleSimResult
     >>= exitWith

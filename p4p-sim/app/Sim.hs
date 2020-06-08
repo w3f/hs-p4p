@@ -24,8 +24,8 @@ import           System.Exit               (ExitCode (..), exitWith)
 import           P4P.Sim
 import           P4P.Sim.EchoProcess       (EchoState (..))
 import           P4P.Sim.Options           (simParseOptions)
-import           P4P.Sim.Util              (ChaChaDRGInsecure, PMut', Pid,
-                                            getEntropy, mkInitPids)
+import           P4P.Sim.Util              (ChaChaDRGInsecure, PMut',
+                                            getEntropy)
 import           P4P.Sim.Util.IO           (maybeTerminalGetInput)
 
 
@@ -41,8 +41,7 @@ withSProt prot a = case prot of
   SEcho -> a
   SKad  -> a
 
-type SimC ps
-  = (SimProcess Pid (PMut' ps), SimLog Pid ps (), SimReRe Pid ps (), Proc ps)
+type SimC ps = (SimProcess (PMut' ps), SimLog ps (), SimReRe ps (), Proc ps)
 
 withSimProto
   :: SimOptions
@@ -63,18 +62,17 @@ runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
                                     "p4p"
                                     ".sim_history"
                                     ("p4p " <> drop 5 (show simProto) <> "> ")
-  let initPids  = mkInitPids opt
-  let simUserIO = defaultSimUserIO @_ @ps @() getInput
-  runSimIO @_ @(PMut' ps) opt initPids mkPS simUserIO >>= handleSimResult
+  let simUserIO = defaultSimUserIO @ps @() getInput
+  runSimIO @(PMut' ps) opt mkPS simUserIO >>= handleSimResult
   where SimOptions {..} = opt
 
-newtype UserSimAsync' pid ps = UserSimAsync' (UserSimAsync pid ps ())
+newtype UserSimAsync' ps = UserSimAsync' (UserSimAsync ps ())
 
 -- run via tb-queues, can be loaded from GHCI
-runTB :: SimOptions -> IO (DSum SProt (UserSimAsync' Pid))
+runTB :: SimOptions -> IO (DSum SProt UserSimAsync')
 runTB opt = withSimProto opt $ \(p :: SProt ps) mkPS -> withSProt p $ do
-  let runSimIO' = runSimIO @_ @(PMut' ps) opt (mkInitPids opt) mkPS
-  handles <- newSimAsync @_ @(PMut' ps) (Just print) runSimIO'
+  let runSimIO' = runSimIO @(PMut' ps) opt mkPS
+  handles <- newSimAsync @(PMut' ps) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles
 
 main :: IO ()

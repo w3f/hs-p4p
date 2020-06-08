@@ -29,15 +29,15 @@ import           P4P.Sim.Internal
 import           P4P.Sim.Types
 
 
-data PSimX ref st pid p x = PSimX !(PSim ref st pid p) !x
-type SimXProcess pid p x = (Process x, SimXProtocol pid (State p) (State x))
+data PSimX ref st p x = PSimX !(PSim ref st p) !x
+type SimXProcess p x = (Process x, SimXProtocol (State p) (State x))
 
 instance (
-  Process (PSim ref st pid p),
-  SimXProcess pid p x
- ) => Process (PSimX ref st pid p x) where
-  type State (PSimX ref st pid p x) = SimFullState pid (State p) (State x)
-  type Ctx (PSimX ref st pid p x) m = (Ctx (PSim ref st pid p) m, Ctx x m)
+  Process (PSim ref st p),
+  SimXProcess p x
+ ) => Process (PSimX ref st p x) where
+  type State (PSimX ref st p x) = SimFullState (State p) (State x)
+  type Ctx (PSimX ref st p x) m = (Ctx (PSim ref st p) m, Ctx x m)
 
   proceed (SimFullState sp ss x) =
     PSimX <$> proceed (SimFullState sp ss ()) <*> proceed x
@@ -49,13 +49,13 @@ instance (
   localNowM (PSimX s x) = localNowM s
 
   reactM (PSimX s x) =
-    knot2UReactM @_ @_ @(SimUserI pid (State p)) @(SimUserO pid (State p))
+    knot2UReactM @_ @_ @(SimUserI (State p)) @(SimUserO (State p))
       @(UserI (State x))
       @(UserI (State x))
       @(XUserO (State x))
-      @(SimUserI pid (State p))
-      @(SimXUserI pid (State p) (State x))
-      @(SimXUserO pid (State p) (State x))
+      @(SimUserI (State p))
+      @(SimXUserI (State p) (State x))
+      @(SimXUserO (State p) (State x))
       selInU
       mkI1U
       mkI2U
@@ -70,14 +70,14 @@ instance (
    where
     selInU = \case
       SimExtensionI xi ->
-        maybe Non Eno $ toUserI @pid @(State p) @(State x) (Right xi)
+        maybe Non Eno $ toUserI @(State p) @(State x) (Right xi)
       i -> One (i $> error "unreachable, fmap into Void")
     mkI1U = either id id
     mkI2U = either id id
-    selO1U o = case toUserI @_ @_ @(State x) (Left o) of
+    selO1U o = case toUserI @_ @(State x) (Left o) of
       Just xsi -> Two o xsi
       Nothing  -> One o
-    selO2U xso = case fromUserO @_ @_ @(State x) xso of
+    selO2U xso = case fromUserO @_ @(State x) xso of
       Left  i -> Eno i
       Right o -> One o
     mkOutU = \case
@@ -87,21 +87,21 @@ instance (
 
 -- | Run a sim with an extension 'Process'.
 runSimX
-  :: forall pid p x xs_ m
-   . SimProcess pid p
+  :: forall p x xs_ m
+   . SimProcess p
   => Ctx p m
   => Monad m
-  => SimXProcess pid p x
-  => Ctx x (StateT (FakeAlloc2 (SimRunState pid p) xs_) m)
-  => m (Maybe (SimXI pid (State p) (State x)))
-  -> (Tick -> [SimXO pid (State p) (State x)] -> m ())
-  -> SimFullState pid (State p) (State x)
-  -> m (SimFullState pid (State p) (State x))
+  => SimXProcess p x
+  => Ctx x (StateT (FakeAlloc2 (SimRunState p) xs_) m)
+  => m (Maybe (SimXI (State p) (State x)))
+  -> (Tick -> [SimXO (State p) (State x)] -> m ())
+  -> SimFullState (State p) (State x)
+  -> m (SimFullState (State p) (State x))
 {- API note:
 
 This is fugly:
 
-    Ctx x (StateT (FakeAlloc2 (SimRunState pid p) xs_) m)
+    Ctx x (StateT (FakeAlloc2 (SimRunState p) xs_) m)
 
 It's due to our implementation of "instance Process (PSim ..)" in Internal.hs,
 we can solve it in two ways:
@@ -109,7 +109,7 @@ we can solve it in two ways:
 1. Force the extension to reuse the StateT monad that PSim runs in, the current way
 2. Hide the StateT monad that PSim runs in; this is also possible via UnMonadTrans:
 
-   type Ctx (PSimX ref st pid p x) m = (Ctx (PSim ref st pid p) m, Ctx x (UnMonadTrans m))
+   type Ctx (PSimX ref st p x) m = (Ctx (PSim ref st p) m, Ctx x (UnMonadTrans m))
 
    then sprinkle a few 'lift' into the implementation.
 
@@ -124,8 +124,7 @@ Happily, runSimXS itself doesn't contain this fugliness and its API is clean.
 However it only works on extension processes implemented as a pure Proc.
 -}
 runSimX simRunI simRunO s0 =
-  simulate
-      @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState pid p) xs_) pid p x)
+  simulate @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
       (lift simRunI)
       ((lift .) . simRunO)
       s0
@@ -133,18 +132,15 @@ runSimX simRunI simRunO s0 =
 
 -- | Run a sim with an extension 'Proc'.
 runSimXS
-  :: forall pid p xs m
-   . SimProcess pid p
+  :: forall p xs m
+   . SimProcess p
   => Ctx p m
   => Monad m
-  => SimXProtocol pid (State p) xs
+  => SimXProtocol (State p) xs
   => Proc xs
-  => m (Maybe (SimXI pid (State p) xs))
-  -> (Tick -> [SimXO pid (State p) xs] -> m ())
-  -> SimFullState pid (State p) xs
-  -> m (SimFullState pid (State p) xs)
+  => m (Maybe (SimXI (State p) xs))
+  -> (Tick -> [SimXO (State p) xs] -> m ())
+  -> SimFullState (State p) xs
+  -> m (SimFullState (State p) xs)
 runSimXS =
-  runSimX @pid @p
-    @(PRef (Const (SNat 2)) (FakeAlloc2 (SimRunState pid p) xs) xs)
-    @xs
-    @m
+  runSimX @p @(PRef (Const (SNat 2)) (FakeAlloc2 (SimRunState p) xs) xs) @xs @m

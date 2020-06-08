@@ -60,11 +60,11 @@ int = fromIntegral
 
 
 proceedAll
-  :: (Process p, Applicative m, Ctx p m) => Map pid (State p) -> m (Map pid p)
+  :: (Process p, Applicative m, Ctx p m) => Map Pid (State p) -> m (Map Pid p)
 proceedAll = traverse proceed
 
 suspendAll
-  :: (Process p, Applicative m, Ctx p m) => Map pid p -> m (Map pid (State p))
+  :: (Process p, Applicative m, Ctx p m) => Map Pid p -> m (Map Pid (State p))
 suspendAll = traverse suspend
 
 -- | Given a set of source addresses and a target address, select a single
@@ -86,16 +86,15 @@ sampleLatency s t = \case
       -- see https://stats.stackexchange.com/a/159522
 
 -- TODO: SimT should be a newtype, so it doesn't clash with MonadState
-type SimRunState pid p = (Map pid p, SimState pid (State p))
-type SimT pid p = StateT (SimRunState pid p)
-type SimWT pid p m a = WriterT [SimO pid (State p)] (SimT pid p m) a
+type SimRunState p = (Map Pid p, SimState (State p))
+type SimT p = StateT (SimRunState p)
+type SimWT p m a = WriterT [SimO (State p)] (SimT p m) a
 
 {- | React to a simulation input. -}
 simReact
-  :: forall pid p m
-   . SimProcess pid p
-  => Ctx p m
-  => Monad m => SimI pid (State p) -> SimT pid p m [SimO pid (State p)]
+  :: forall p m
+   . SimProcess p
+  => Ctx p m => Monad m => SimI (State p) -> SimT p m [SimO (State p)]
 simReact input = execWriterT $ do
   realNow <- use $ _2 . _simNow
   procs   <- use _1
@@ -152,7 +151,7 @@ simReact input = execWriterT $ do
           pushPMsgI realNow pid (MsgUser userI)
  where
   -- pop a single inbox message up-to-and-including @realNow@
-  popPMsgI :: Tick -> pid -> SimWT pid p m (Maybe (ProcMsgI p))
+  popPMsgI :: Tick -> Pid -> SimWT p m (Maybe (ProcMsgI p))
   popPMsgI realNow pid = _2 . _simIn . at pid . nom %%= \inboxes ->
     case M.minViewWithKey inboxes of
       Just ((t, ibx), remain) | t <= realNow -> case ibx of
@@ -164,16 +163,16 @@ simReact input = execWriterT $ do
       _ -> (Nothing, inboxes) -- empty inboxes or min tick > now
 
   -- push a single inbox message for @future@
-  pushPMsgI :: Tick -> pid -> ProcMsgI p -> SimWT pid p m ()
+  pushPMsgI :: Tick -> Pid -> ProcMsgI p -> SimWT p m ()
   pushPMsgI future pid msgI =
     _2 . _simIn . at pid . nom . at future . nom %= (SQ.|> msgI)
 
   -- map (or unmap) an address to a pid
-  mapAddress :: ProcAddr p -> pid -> Bool -> SimWT pid p m ()
+  mapAddress :: ProcAddr p -> Pid -> Bool -> SimWT p m ()
   mapAddress addr pid b = _2 . _simAddr . at addr . nom . contains pid .= b
 
   -- run the next message from the inbox, if available
-  runInbox :: Tick -> pid -> p -> SimWT pid p m (Maybe p)
+  runInbox :: Tick -> Pid -> p -> SimWT p m (Maybe p)
   runInbox realNow pid proc = popPMsgI realNow pid >>= \case
     Nothing   -> pure Nothing
     Just msgI -> do
@@ -181,14 +180,14 @@ simReact input = execWriterT $ do
       pure $ Just proc
 
   -- run the next tick
-  runTick :: Tick -> pid -> p -> SimWT pid p m ()
+  runTick :: Tick -> Pid -> p -> SimWT p m ()
   runTick realNow pid proc = do
     let tickMsg = MsgRT (RTTick realNow ())
     procInput realNow pid proc tickMsg
     pure ()
 
   -- process input and deliver outgoing messages
-  procInput :: Tick -> pid -> p -> ProcMsgI p -> SimWT pid p m ()
+  procInput :: Tick -> Pid -> p -> ProcMsgI p -> SimWT p m ()
   procInput realNow pid proc msgI = do
     let logS = tell1 . MsgAux . SimProcEvent
     logS $ SimMsgRecv pid msgI
@@ -235,15 +234,15 @@ simReact input = execWriterT $ do
           pushPMsgI future p (MsgProc msg')
           logS $ SimMsgSend pid (MsgProc msg')
 
-newtype PSim ref st pid p = PSim (ref (SimRunState pid p))
-type SimProcess pid p = (Ord pid, Ord (ProcAddr p), Process p)
+newtype PSim ref st p = PSim (ref (SimRunState p))
+type SimProcess p = (Ord (ProcAddr p), Process p)
 
 instance (
-  SimProcess pid p,
-  Allocable st (SimRunState pid p) ref
- ) => Process (PSim ref st pid p) where
-  type State (PSim ref st pid p) = SimFullState pid (State p) ()
-  type Ctx (PSim ref st pid p) m
+  SimProcess p,
+  Allocable st (SimRunState p) ref
+ ) => Process (PSim ref st p) where
+  type State (PSim ref st p) = SimFullState (State p) ()
+  type Ctx (PSim ref st p) m
     = ( Ctx p (UnMonadTrans m)
       , Monad (UnMonadTrans m)
       , m ~ StateT st (UnMonadTrans m)
@@ -286,16 +285,16 @@ simulate simRunI simRunO = fmap snd . asState (reactWithIO @p simRunI simRunO)
 
 -- note: @p@ here does refer to the process type of individual processes
 runSim
-  :: forall pid p m
-   . SimProcess pid p
+  :: forall p m
+   . SimProcess p
   => Ctx p m
   => Monad m
-  => m (Maybe (SimI pid (State p)))
-  -> (Tick -> [SimO pid (State p)] -> m ())
-  -> SimFullState pid (State p) ()
-  -> m (SimFullState pid (State p) ())
+  => m (Maybe (SimI (State p)))
+  -> (Tick -> [SimO (State p)] -> m ())
+  -> SimFullState (State p) ()
+  -> m (SimFullState (State p) ())
 runSim simRunI simRunO s0 =
-  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState pid p)) pid p)
+  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p)
       (lift simRunI)
       ((lift .) . simRunO)
       s0

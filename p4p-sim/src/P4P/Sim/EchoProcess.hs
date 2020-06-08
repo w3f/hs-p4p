@@ -5,13 +5,13 @@
 module P4P.Sim.EchoProcess where
 
 -- external
-import           Data.Word    (Word64)
+import           Data.Word    (Word16)
 import           GHC.Generics (Generic)
 import           P4P.Proc     (GMsg (..), Proc (..), ProtoMsg (..),
                                Protocol (..))
 
 
-type EAddr = Word64
+type EAddr = Word16
 data EchoMsg = EMsg
   { src :: !EAddr
   , dst :: !EAddr
@@ -20,7 +20,7 @@ data EchoMsg = EMsg
 
 data EchoState = EState
   { addrs :: ![EAddr]
-  , count :: !Word64
+  , count :: !Word16
   }
   deriving (Eq, Ord, Show, Read, Generic)
 

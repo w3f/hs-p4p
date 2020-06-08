@@ -24,6 +24,7 @@ import           Data.Map.Strict       (Map)
 import           Data.Schedule         (Tick, TickDelta)
 import           Data.Set              (Set)
 import           Data.Void             (Void, absurd)
+import           Data.Word             (Word16)
 import           GHC.Generics          (Generic)
 import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
                                         Protocol (..), RuntimeI, RuntimeO)
@@ -33,18 +34,22 @@ import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
 data KV k v = !k :~ !v
   deriving (Eq, Ord, Show, Read, Generic)
 
-data SimProcEvt' pid i o a =
+-- | Process id type. This is internal to the simulation for convenience, and
+-- is not made available to the process themselves.
+type Pid = Word16
+
+data SimProcEvt' i o a =
   -- | A process received a message.
-    SimMsgRecv !pid !i
+    SimMsgRecv !Pid !i
   -- | A process sent a message.
-  | SimMsgSend !pid !o
+  | SimMsgSend !Pid !o
   -- | The user or a process tried to send to a non-existing pid.
-  | SimNoSuchPid !(Either () pid) !pid
+  | SimNoSuchPid !(Either () Pid) !Pid
   -- | A process tried to send to an address with no listeners.
-  | SimNoSuchAddr !pid !a
+  | SimNoSuchAddr !Pid !a
  deriving (Eq, Ord, Show, Read, Generic)
 makePrisms ''SimProcEvt'
-type SimProcEvt pid ps = SimProcEvt' pid (GMsgI ps) (GMsgO ps) (PAddr ps)
+type SimProcEvt ps = SimProcEvt' (GMsgI ps) (GMsgO ps) (PAddr ps)
 
 -- | All state relating to a process in the simulation.
 --
@@ -58,59 +63,59 @@ data SimProcState ps i a = SimProcState
   deriving (Eq, Ord, Show, Read, Generic)
 
 -- | User input into the sim. TODO: will be extended with debugging commands.
-data SimUserI' pid ps ui i a xi =
-    SimProcUserI !pid !ui
+data SimUserI' ps ui i a xi =
+    SimProcUserI !Pid !ui
   | SimGetAllPids
-  | SimProcAdd !pid !(SimProcState ps i a)
-  | SimProcDel !pid
+  | SimProcAdd !Pid !(SimProcState ps i a)
+  | SimProcDel !Pid
   | SimExtensionI !xi
     -- ^ extension input type
  deriving (Eq, Ord, Show, Read, Generic, Functor)
-type SimXUserI pid ps xs
-  = SimUserI' pid ps (UserI ps) (GMsgI ps) (PAddr ps) (XUserI xs)
-type SimUserI pid ps = SimXUserI pid ps ()
+type SimXUserI ps xs
+  = SimUserI' ps (UserI ps) (GMsgI ps) (PAddr ps) (XUserI xs)
+type SimUserI ps = SimXUserI ps ()
 
 -- | User output from the sim. TODO: will be extended with debugging output.
-data SimUserO' pid ps uo i a xo =
-    SimProcUserO !pid !uo
-  | SimAllPids !(Set pid)
-  | SimProcAddResult !pid !Bool
-  | SimProcDelResult !pid !(Maybe (SimProcState ps i a))
+data SimUserO' ps uo i a xo =
+    SimProcUserO !Pid !uo
+  | SimAllPids !(Set Pid)
+  | SimProcAddResult !Pid !Bool
+  | SimProcDelResult !Pid !(Maybe (SimProcState ps i a))
   | SimExtensionO !xo
     -- ^ extension output type
  deriving (Eq, Ord, Show, Read, Generic, Functor)
-type SimXUserO pid ps xs
-  = SimUserO' pid ps (UserO ps) (GMsgI ps) (PAddr ps) (XUserO xs)
-type SimUserO pid ps = SimXUserO pid ps ()
+type SimXUserO ps xs
+  = SimUserO' ps (UserO ps) (GMsgI ps) (PAddr ps) (XUserO xs)
+type SimUserO ps = SimXUserO ps ()
 
-data SimAuxO' pid ao i o a =
-    SimUserAuxO !pid !ao
-  | SimProcEvent !(SimProcEvt' pid i o a)
+data SimAuxO' ao i o a =
+    SimUserAuxO !Pid !ao
+  | SimProcEvent !(SimProcEvt' i o a)
   -- :^ TODO: filter out User messages, these are already represented elsewhere
  deriving (Eq, Ord, Show, Read, Generic)
-type SimAuxO pid ps = SimAuxO' pid (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
+type SimAuxO ps = SimAuxO' (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
 
 class (
   PMsg xs ~ Void,
   AuxO xs ~ Void,
   Protocol xs
- ) => SimXProtocol pid ps xs where
+ ) => SimXProtocol ps xs where
   type XUserI xs
   type XUserO xs
 
-  toUserI :: Either (SimUserO pid ps) (XUserI xs) -> Maybe (UserI xs)
+  toUserI :: Either (SimUserO ps) (XUserI xs) -> Maybe (UserI xs)
   default toUserI
-    :: (UserI xs ~ Either (SimUserO pid ps) (XUserI xs))
-    => Either (SimUserO pid ps) (XUserI xs) -> Maybe (UserI xs)
+    :: (UserI xs ~ Either (SimUserO ps) (XUserI xs))
+    => Either (SimUserO ps) (XUserI xs) -> Maybe (UserI xs)
   toUserI = Just
 
-  fromUserO :: UserO xs -> Either (SimUserI pid ps) (XUserO xs)
+  fromUserO :: UserO xs -> Either (SimUserI ps) (XUserO xs)
   default fromUserO
-    :: (UserO xs ~ Either (SimUserI pid ps) (XUserO xs))
-    => UserO xs -> Either (SimUserI pid ps) (XUserO xs)
+    :: (UserO xs ~ Either (SimUserI ps) (XUserO xs))
+    => UserO xs -> Either (SimUserI ps) (XUserO xs)
   fromUserO = id
 
-instance SimXProtocol pid ps () where
+instance SimXProtocol ps () where
   type XUserI () = Void
   type XUserO () = Void
   toUserI   = const Nothing
@@ -139,23 +144,23 @@ data SimLatency = SLatAddrIndep !(KnownDistNonNeg TickDelta)
 -- | State of the simulation.
 --
 -- Note that process state is stored separately.
-data SimState' pid i a = SimState
+data SimState' i a = SimState
   { simNow     :: !Tick
   , simDRG     :: !ChaChaDRGInsecure
   , simLatency :: !SimLatency
-  , simAddr    :: !(Map a (Set pid))
-  , simIn      :: !(Map pid (Map Tick (SQ.Seq i)))
+  , simAddr    :: !(Map a (Set Pid))
+  , simIn      :: !(Map Pid (Map Tick (SQ.Seq i)))
   }
   deriving (Eq, Ord, Show, Read, Generic)
 makeLenses_ ''SimState'
-type SimState pid ps = SimState' pid (GMsgI ps) (PAddr ps)
+type SimState ps = SimState' (GMsgI ps) (PAddr ps)
 
 newSimState
   :: (ByteArrayAccess seed, Ord a)
   => seed
   -> SimLatency
-  -> Set pid
-  -> SimState' pid i a
+  -> Set Pid
+  -> SimState' i a
 newSimState seed latency pids =
   SimState 0 (initialize seed) latency mempty (M.fromSet (const mempty) pids)
 
@@ -169,34 +174,33 @@ data SimError = SimFailedReplayCompare
   deriving (Eq, Ord, Show, Read, Generic)
 
 -- | Full state of the simulation.
-data SimFullState pid ps xs = SimFullState
-  { simProcs  :: !(Map pid ps)
-  , simState  :: !(SimState pid ps)
+data SimFullState ps xs = SimFullState
+  { simProcs  :: !(Map Pid ps)
+  , simState  :: !(SimState ps)
   , simXState :: !xs
   }
   deriving (Generic, Functor)
 -- note: we are forced to do this to define @instance Protocol@, because we
 -- can't apply type families in the instance declaration.
-deriving instance (Eq (Map pid ps), Eq (SimState pid ps), Eq xs)
-  => Eq (SimFullState pid ps xs)
-deriving instance (Ord (Map pid ps), Ord (SimState pid ps), Ord xs)
-  => Ord (SimFullState pid ps xs)
-deriving instance (Show (Map pid ps), Show (SimState pid ps), Show xs)
-  => Show (SimFullState pid ps xs)
-deriving instance (Read (Map pid ps), Read (SimState pid ps), Read xs)
-  => Read (SimFullState pid ps xs)
+deriving instance (Eq (Map Pid ps), Eq (SimState ps), Eq xs)
+  => Eq (SimFullState ps xs)
+deriving instance (Ord (Map Pid ps), Ord (SimState ps), Ord xs)
+  => Ord (SimFullState ps xs)
+deriving instance (Show (Map Pid ps), Show (SimState ps), Show xs)
+  => Show (SimFullState ps xs)
+deriving instance (Read (Map Pid ps), Read (SimState ps), Read xs)
+  => Read (SimFullState ps xs)
 
-instance SimXProtocol pid ps xs => Protocol (SimFullState pid ps xs) where
-  type PMsg (SimFullState pid ps xs) = Void
-  type UserI (SimFullState pid ps xs) = SimXUserI pid ps xs
-  type UserO (SimFullState pid ps xs) = SimXUserO pid ps xs
-  type AuxO (SimFullState pid ps xs) = SimAuxO pid ps
+instance SimXProtocol ps xs => Protocol (SimFullState ps xs) where
+  type PMsg (SimFullState ps xs) = Void
+  type UserI (SimFullState ps xs) = SimXUserI ps xs
+  type UserO (SimFullState ps xs) = SimXUserO ps xs
+  type AuxO (SimFullState ps xs) = SimAuxO ps
 
 -- | Input into the sim.
-type SimI pid ps = GMsg (RuntimeI ()) (SimUserI pid ps) Void Void
-type SimXI pid ps xs = GMsg (RuntimeI ()) (SimXUserI pid ps xs) Void Void
+type SimI ps = GMsg (RuntimeI ()) (SimUserI ps) Void Void
+type SimXI ps xs = GMsg (RuntimeI ()) (SimXUserI ps xs) Void Void
 
 -- | Output from the sim.
-type SimO pid ps = GMsg (RuntimeO Void) (SimUserO pid ps) Void (SimAuxO pid ps)
-type SimXO pid ps xs
-  = GMsg (RuntimeO Void) (SimXUserO pid ps xs) Void (SimAuxO pid ps)
+type SimO ps = GMsg (RuntimeO Void) (SimUserO ps) Void (SimAuxO ps)
+type SimXO ps xs = GMsg (RuntimeO Void) (SimXUserO ps xs) Void (SimAuxO ps)

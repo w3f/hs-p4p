@@ -4,6 +4,7 @@ module P4P.Sim
   (
   -- * Main definitions
     KV(..)
+  , Pid
   , SimUserI'(..)
   , SimUserI
   , SimUserO'(..)

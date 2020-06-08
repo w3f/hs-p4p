@@ -137,10 +137,8 @@ closeIOAction = void . traverse hClose
 
 -- | Convenience type alias for being able to record and replay a simulation.
 -- TODO: use ByteString/Generic-based thing, e.g. Serialise
-type SimReRe pid ps xs
-  = ( Show pid
-    , Read pid
-    , Show ps
+type SimReRe ps xs
+  = ( Show ps
     , Read ps
     , Show (UserI ps)
     , Read (UserI ps)
@@ -159,16 +157,15 @@ type SimReRe pid ps xs
     , Read (XUserO xs)
     )
 
-type SimUserIO pid ps xs
-  = (IO (Maybe (SimXUserI pid ps xs)), [SimXUserO pid ps xs] -> IO ())
-type UserSimIO pid ps xs
-  = (Maybe (SimXUserI pid ps xs) -> IO (), IO [SimXUserO pid ps xs])
-type UserSimSTM pid ps xs
-  = (Maybe (SimXUserI pid ps xs) -> STM (), STM [SimXUserO pid ps xs])
+type SimUserIO ps xs
+  = (IO (Maybe (SimXUserI ps xs)), [SimXUserO ps xs] -> IO ())
+type UserSimIO ps xs = (Maybe (SimXUserI ps xs) -> IO (), IO [SimXUserO ps xs])
+type UserSimSTM ps xs
+  = (Maybe (SimXUserI ps xs) -> STM (), STM [SimXUserO ps xs])
 
-data UserSimAsync pid ps xs = UserSimAsync
-  { simWI         :: !(Maybe (SimXUserI pid ps xs) -> IO ())
-  , simRO         :: !(IO [SimXUserO pid ps xs])
+data UserSimAsync ps xs = UserSimAsync
+  { simWI         :: !(Maybe (SimXUserI ps xs) -> IO ())
+  , simRO         :: !(IO [SimXUserO ps xs])
   , simCancel     :: !(IO ())
   , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
   }
@@ -176,8 +173,7 @@ data UserSimAsync pid ps xs = UserSimAsync
 defaultGetInput :: IO (Maybe String)
 defaultGetInput = hGetLineOrEOF stdin
 
-defaultSimUserIO
-  :: SimReRe pid ps xs => IO (Maybe String) -> SimUserIO pid ps xs
+defaultSimUserIO :: SimReRe ps xs => IO (Maybe String) -> SimUserIO ps xs
 defaultSimUserIO getInput =
   -- support special "pid :~ msg" syntax for SimProcUserI / SimProcUserO
   let i = untilJustM $ getInput >>= \case
@@ -197,7 +193,7 @@ defaultSimUserIO getInput =
   in  (i, traverse_ o)
 
 -- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO :: IO (UserSimIO pid ps xs, SimUserIO pid ps xs)
+tbQueueSimUserIO :: IO (UserSimIO ps xs, SimUserIO ps xs)
 tbQueueSimUserIO = do
   qi <- newTBQueueIO 1
   qo <- newTBQueueIO 1
@@ -208,7 +204,7 @@ tbQueueSimUserIO = do
   pure ((wi, ro), (ri, wo))
 
 -- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO' :: IO (UserSimSTM pid ps xs, SimUserIO pid ps xs)
+tbQueueSimUserIO' :: IO (UserSimSTM ps xs, SimUserIO ps xs)
 tbQueueSimUserIO' = do
   qi <- newTBQueueIO 1
   qo <- newTBQueueIO 1
@@ -230,7 +226,7 @@ sim. An extra function is also returned, which the caller can use to close the
 input stream proactively in a graceful way: the sim will see an explicit EOF
 after consuming any outstanding unconsumed inputs.
 -}
-combineSimUserIO :: [SimUserIO pid ps xs] -> IO (SimUserIO pid ps xs, IO ())
+combineSimUserIO :: [SimUserIO ps xs] -> IO (SimUserIO ps xs, IO ())
 combineSimUserIO ios = do
   let (is, os) = unzip ios
   (i, close) <- foreverInterleave is
@@ -244,9 +240,8 @@ c2i (Right Nothing ) = Nothing
 c2i (Left  t       ) = Just (MsgRT (RTTick t ()))
 c2i (Right (Just a)) = Just (MsgUser a)
 
-type SimLog pid ps xs
-  = ( Show pid
-    , Show ps
+type SimLog ps xs
+  = ( Show ps
     , Show (PAddr ps)
     , Show (GMsgI ps)
     , Show (GMsgO ps)
@@ -258,12 +253,12 @@ type SimLog pid ps xs
     )
 
 defaultSimLog
-  :: SimLog pid ps xs
-  => (SimXO pid ps xs -> Bool)
+  :: SimLog ps xs
+  => (SimXO ps xs -> Bool)
   -> String
   -> Handle
   -> Tick
-  -> SimXO pid ps xs
+  -> SimXO ps xs
   -> IO ()
 defaultSimLog f tFmt h t evt = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
@@ -274,7 +269,7 @@ logAllNoUser = \case
   MsgUser _ -> False
   _         -> True
 
-logAllNoUserTicks :: GMsg r u p (SimAuxO pid ps) -> Bool
+logAllNoUserTicks :: GMsg r u p (SimAuxO ps) -> Bool
 logAllNoUserTicks = \case
   MsgUser _ -> False
   MsgAux (SimProcEvent (SimMsgRecv _ (MsgRT (RTTick _ _)))) -> False
@@ -288,23 +283,23 @@ compareOMsg simError t om h = do
   where s = fromMaybe "<EOF>"
 
 -- | Execution runtime for the simulation.
-data SimRT pid ps xs m = SimRT
+data SimRT ps xs m = SimRT
   { simClose  :: !(m ())
   , simStatus :: !(m (Either (NonEmpty SimError) ()))
   , simError  :: !(SimError -> m ())
-  , simRunI   :: !(m (Maybe (SimXI pid ps xs)))
-  , simRunO   :: !(Tick -> [SimXO pid ps xs] -> m ())
+  , simRunI   :: !(m (Maybe (SimXI ps xs)))
+  , simRunO   :: !(Tick -> [SimXO ps xs] -> m ())
   }
 
 defaultRT
-  :: forall pid ps xs
-   . (SimLog pid ps xs, SimReRe pid ps xs)
+  :: forall ps xs
+   . (SimLog ps xs, SimReRe ps xs)
   => SimOptions
   -> Tick
-  -> SimUserIO pid ps xs
+  -> SimUserIO ps xs
   -> SimIAction Handle
   -> SimOAction Handle
-  -> IO (SimRT pid ps xs IO)
+  -> IO (SimRT ps xs IO)
 defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
   let picosPerMs   = 1000000000
       picosPerTick = simMsTick * picosPerMs
@@ -312,14 +307,13 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       logFilter    = case simLogging of
         LogAll            -> const True
         LogAllNoUser      -> logAllNoUser
-        LogAllNoUserTicks -> logAllNoUserTicks @_ @_ @_ @pid @ps
+        LogAllNoUserTicks -> logAllNoUserTicks @_ @_ @_ @ps
         LogNone           -> const False
 
   simLog <- case simLogging of
     LogNone -> pure (\_ _ -> pure ())
     _ ->
-      mkHandle simLogOutput
-        >$> defaultSimLog @pid @ps @xs logFilter simLogTimeFmt
+      mkHandle simLogOutput >$> defaultSimLog @ps @xs logFilter simLogTimeFmt
 
   (simI, simIClose) <- case simIActRead simIMsg of
     Nothing -> do
@@ -371,27 +365,26 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
   where SimOptions {..} = opt
 
 grunSimIO
-  :: forall pid p xs
-   . Ord pid
-  => SimLog pid (State p) xs
-  => SimReRe pid (State p) xs
-  => (  IO (Maybe (SimXI pid (State p) xs))
-     -> (Tick -> [SimXO pid (State p) xs] -> IO ())
-     -> SimFullState pid (State p) xs
-     -> IO (SimFullState pid (State p) xs)
+  :: forall p xs
+   . SimLog (State p) xs
+  => SimReRe (State p) xs
+  => (  IO (Maybe (SimXI (State p) xs))
+     -> (Tick -> [SimXO (State p) xs] -> IO ())
+     -> SimFullState (State p) xs
+     -> IO (SimFullState (State p) xs)
      )
   -> SimOptions
   -> xs
-  -> S.Set pid
-  -> (pid -> IO (State p))
-  -> SimUserIO pid (State p) xs
+  -> (Pid -> IO (State p))
+  -> SimUserIO (State p) xs
   -> IO (Either (NonEmpty SimError) ())
-grunSimIO lrunSim opt initXState initPids mkPState simUserIO =
+grunSimIO lrunSim opt initXState mkPState simUserIO =
   bracket (openIOAction simIOAction) closeIOAction $ \SimIOAction {..} -> do
     --print opt
     ifs <- case simIActRead simIState of
       Nothing -> do
-        seed   <- getEntropy @ScrubbedBytes 64
+        seed <- getEntropy @ScrubbedBytes 64
+        let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
         states <- M.traverseWithKey (const . mkPState)
           $ M.fromSet (const ()) initPids
         pure $ SimFullState states
@@ -401,7 +394,7 @@ grunSimIO lrunSim opt initXState initPids mkPState simUserIO =
     whenJust (simIActWrite simIState) $ flip hPutStrLn (show ifs)
 
     let realNow = simNow (simState ifs)
-        mkRT    = defaultRT @_ @_ @xs opt realNow simUserIO simIMsg simOMsg
+        mkRT    = defaultRT @_ @xs opt realNow simUserIO simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
       when simDbgPprState $ pHPrint stderr ifs
       ofs <- lrunSim simRunI simRunO ifs
@@ -421,19 +414,18 @@ grunSimIO lrunSim opt initXState initPids mkPState simUserIO =
   where SimOptions {..} = opt
 
 runSimIO
-  :: forall pid p
-   . SimProcess pid p
+  :: forall p
+   . SimProcess p
   => Ctx p IO
-  => SimLog pid (State p) ()
-  => SimReRe pid (State p) ()
+  => SimLog (State p) ()
+  => SimReRe (State p) ()
   => SimOptions
-  -> S.Set pid
-  -> (pid -> IO (State p))
-  -> SimUserIO pid (State p) ()
+  -> (Pid -> IO (State p))
+  -> SimUserIO (State p) ()
   -> IO (Either (NonEmpty SimError) ())
 runSimIO opt =
-  let run = if simDbgEmptySimX opt then runSimXS @_ @p @() else runSim @_ @p
-  in  grunSimIO @_ @p run opt ()
+  let run = if simDbgEmptySimX opt then runSimXS @p @() else runSim @p
+  in  grunSimIO @p run opt ()
 
 handleSimResult :: Either (NonEmpty SimError) () -> IO ExitCode
 handleSimResult = \case
@@ -443,12 +435,12 @@ handleSimResult = \case
     pure (ExitFailure 1)
 
 newSimAsync
-  :: forall pid p
-   . Maybe (SimXUserO pid (State p) () -> IO ())
-  -> (SimUserIO pid (State p) () -> IO (Either (NonEmpty SimError) ()))
-  -> IO (UserSimAsync pid (State p) ())
+  :: forall p
+   . Maybe (SimXUserO (State p) () -> IO ())
+  -> (SimUserIO (State p) () -> IO (Either (NonEmpty SimError) ()))
+  -> IO (UserSimAsync (State p) ())
 newSimAsync maybeEat runSimIO' = do
-  ((simWI, simRO), simUserIO) <- tbQueueSimUserIO @_ @(State p) @()
+  ((simWI, simRO), simUserIO) <- tbQueueSimUserIO @(State p) @()
   aMain                       <- async $ runSimIO' simUserIO
   link aMain
   simCancel <- case maybeEat of

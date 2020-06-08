@@ -99,13 +99,13 @@ This slight hack adds support for auto-join/quit, by having the sim extension
 communicate this implicitly with the 'SimUserIO' that is driving it.
 -}
 hookAutoJoinQuit
-  :: forall pid ps xs
+  :: forall ps xs
    . Bool
   -> Bool
   -> XUserI xs
   -> (XUserO xs -> Bool)
-  -> SimUserIO pid ps xs
-  -> IO (SimUserIO pid ps xs)
+  -> SimUserIO ps xs
+  -> IO (SimUserIO ps xs)
 hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do
   if not autoJoin && not autoQuit
     then pure (ui, uo)
