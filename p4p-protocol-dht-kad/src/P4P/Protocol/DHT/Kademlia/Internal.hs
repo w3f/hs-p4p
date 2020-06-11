@@ -59,8 +59,9 @@ import qualified P4P.Proc.Lens                     as P
 import           Control.Lens                      (Lens', at, ix, sans, use,
                                                     (%%=), (%%~), (%=), (.=),
                                                     (^?))
-import           Control.Lens.Extra                (unsafeIx, (%%=!), (%&&&%))
-import           Control.Monad                     (void, when)
+import           Control.Lens.Extra                (at_, unsafeIx, (%%=!),
+                                                    (%&&&%))
+import           Control.Monad                     (unless, when)
 import           Control.Monad.Extra               (whenJust)
 import           Control.Monad.Schedule            (tickTask)
 import           Control.Monad.Trans.Class         (lift)
@@ -73,6 +74,7 @@ import           Data.Bifunctor                    (first, second)
 import           Data.Foldable                     (for_, toList)
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
+import           Data.Map.Bounded                  (ValueAt (..))
 import           Data.Maybe                        (isNothing)
 import           Data.Tuple                        (swap)
 --import           Debug.Pretty.Simple               (pTraceShowId)
@@ -184,6 +186,10 @@ kBucketBump n s0 = flip runStateWT s0 $ do
     (refresh', sched1) = SC.renew parIntvKBRefresh bRefresh sched0
     refresh = fromJustNote "bucket refresh had run w/o replacing..." refresh'
 
+nodeNotFound :: String -> NodeId -> String -> NodeId -> String
+nodeNotFound tag self ty nodeId =
+  show self <> ": " <> tag <> " did not find " <> ty <> " node: " <> show nodeId
+
 insertNodeId
   :: (Monad m, R.DRG' g)
   => Maybe SC.Tick
@@ -202,10 +208,11 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
       _kOwnInfo %= updateNodeAddr
     else do
       r <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ bEntriesTryInsert
-      let (op, nodeToPing) = fromJustNote "unreachable" $ r
-      -- fromJust is safe: we checked nodeId == kSelf just above
-      -- FIXME: more sophistication with this behaviour:
-      -- track the oreqRequest, cancel it if the node gets evicted in the meantime
+      let
+        (op, nodeToPing) =
+          fromJustNote
+              "kBucketModifyAtNode gave Nothing, but we checked nodeId /= kSelf"
+            $ r
       whenJust nodeToPing $ \nInfo -> do
         stateWT $ oreqRequest (nodeInfoOf nInfo) Ping
       writeLog $ I_KBucketOp op
@@ -237,11 +244,16 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
           -- fromJust is safe: isReply is only true if it matches an existing
           -- pending Ping OReqRequest, which we do only in the outer function,
           -- which we only do if we set (snd ent) to Just below.
-          ( Just $ KBucketNodePingCheckSuccess
-            (nodeIdOf (fromJustNote "reply without pending" $ snd ent))
-            nodeId
-          , Just (updateNodeAddr (fst ent), Nothing)
-          )
+          let
+            errmsg = nodeNotFound "KBucketNodePingCheckSuccess"
+                                  (kSelf s0)
+                                  "pending"
+                                  nodeId
+          in  ( Just $ KBucketNodePingCheckSuccess
+                (nodeIdOf (fromJustNote errmsg $ snd ent))
+                nodeId
+              , Just (updateNodeAddr (fst ent), Nothing)
+              )
         else
           (Just $ KBucketNodeAlreadyIn nodeId, Just (first updateNodeAddr ent))
       Nothing -> if not (S.lenBSeq e0 >= fromIntegral parRepRouting)
@@ -287,15 +299,35 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
 insertNodeIdTOReqPing
   :: Monad m => SC.Tick -> NodeId -> State g -> m ([KadO], State g)
 insertNodeIdTOReqPing realNow nodeId s0 = flip runStateWT s0 $ do
-  void $ state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
-    S.bStatePL (nodeMatch . fst) (S.bSortBy compare) $ \case
-      Just ent ->
-        -- I-insert-node-lru-fail-ping
-        ((), Just (fromJustNote (errmsg "pending") $ snd ent, Nothing))
-      Nothing -> error $ errmsg "original"
- where
-  nodeMatch = (==) nodeId . nodeIdOf
-  errmsg t = "insertNodeIdTOReqPing did not find " <> t <> " node"
+  alreadySucceeded <- use (_kSentReq . at_ (nodeId, Ping)) >>= \case
+    Present oreqProc -> case oreqFuture oreqProc of
+      F.SFSettled (F.GotResult Pong) -> pure True
+      _                              -> pure False
+    _ ->
+      error "insertNodeIdTOReqPing failed to find corresponding Ping request"
+  unless alreadySucceeded $ do
+    r <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
+      S.bStatePL (nodeMatch . fst) (S.bSortBy compare) $ \case
+        Just ent ->
+          -- I-insert-node-lru-fail-ping
+          let
+            errmsg = nodeNotFound "KBucketNodePingCheckFail"
+                                  (kSelf s0)
+                                  "pending"
+                                  nodeId
+            pendingNode = fromJustNote errmsg $ snd ent
+          in
+            ( KBucketNodePingCheckFail (nodeIdOf pendingNode) nodeId
+            , Just (pendingNode, Nothing)
+            )
+        Nothing -> error $ nodeNotFound "KBucketNodePingCheckFail"
+                                        (kSelf s0)
+                                        "original"
+                                        nodeId
+    let op = fromJustNote "kBucketModifyAtNode gave Nothing in TOReqPing" r
+    writeLog $ I_KBucketOp op
+  -- kHandleInput already calls oreqDelete so no need to do it here
+  where nodeMatch = (==) nodeId . nodeIdOf
 
 -- TODO: this should be removeable, only used in JoinNetwork
 insertNodes

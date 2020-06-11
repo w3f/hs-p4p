@@ -180,7 +180,7 @@ maybeTerminalStdIO interactive dirname filename prompt = do
       cleanup <- callbackHandlerInstall' prompt $ \s -> do
         atomically $ writeTBQueue input s
       fd <- handleToFd stdin
-      a <- async $ forever $ do
+      a  <- async $ forever $ do
         threadWaitRead $ Fd $ fdFD fd
         callbackReadChar
       link a

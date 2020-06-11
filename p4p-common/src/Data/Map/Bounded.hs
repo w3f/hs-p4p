@@ -14,9 +14,7 @@ import           GHC.Stack       (HasCallStack)
 
 
 data ValueAt v =
-    Absent
-    !Bool
-    -- ^ Whether an insert will be honour or ignored
+    Absent !Bool -- ^ Whether an insert will be honoured or ignored
   | Present !v
   deriving (Eq, Show, Read, Generic)
 

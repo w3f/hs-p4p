@@ -215,13 +215,6 @@ main = do
       hookAutoJoinQuit @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
         $ defaultSimUserIO @KS @KSimState stdio
 
-{-
-sim-kad: Safe.fromJustNote Nothing, insertNodeIdTOReqPing did not find pending node
-CallStack (from HasCallStack):
-fromJustNote, called at src/P4P/Protocol/DHT/Kademlia/Internal.hs:286:20 in p4p-protocol-dht-kad-0.0-inplace:P4P.Protocol.DHT.Kademlia.Internal
-1
--- probably we didn't cancel a timeout when evicting a node
--}
     drg <- initializeFrom getEntropy
     let initXState = KSimState drg Nothing
     let params = simXOpts $ fromIntegral $ 1000 `div` simMsTick simOpts

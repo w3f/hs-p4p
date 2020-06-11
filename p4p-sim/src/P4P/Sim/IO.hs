@@ -54,9 +54,10 @@ import           System.IO                      (BufferMode (..), Handle,
                                                  IOMode (..), hClose, hGetLine,
                                                  hPutStrLn, hSetBuffering,
                                                  openFile, stderr, stdin)
-import           System.IO.Error                (catchIOError, isEOFError)
+import           System.IO.Error                (annotateIOError, catchIOError,
+                                                 isEOFError)
 import           Text.Pretty.Simple             (pHPrint)
-import           UnliftIO.Exception             (bracket, mask)
+import           UnliftIO.Exception             (bracket, mask, throwIO)
 
 -- internal
 import           P4P.Sim.Extension
@@ -90,6 +91,9 @@ mkHandle fdOrFile = do
     Left  fd   -> fdToHandle fd
   hSetBuffering h LineBuffering
   pure h
+
+annotateRethrow :: IO a -> (IOError -> IOError) -> IO a
+annotateRethrow act f = catchIOError act $ throwIO . f
 
 type DeferredIO a = Either String (IO a)
 
@@ -393,7 +397,10 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
         pure $ SimFullState states
                             (newSimState seed simInitLatency initPids)
                             initXState
-      Just h -> hGetLine h >$> readNote "simIState read"
+      Just h -> do
+        r <- annotateRethrow (hGetLine h) $ \e -> do
+          annotateIOError e "simIState" Nothing Nothing
+        pure (readNote "simIState read failed" r)
     whenJust (simIActWrite simIState) $ flip hPutStrLn (show ifs)
 
     {-
@@ -435,12 +442,14 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
       let os = show ofs
       whenJust (simOActWrite simOState) $ flip hPutStrLn os
       whenJust (simOActCompare simOState) $ \h -> do
-        os' <- hGetLine h
+        os' <- annotateRethrow (hGetLine h) $ \e ->
+          annotateIOError e "simOState" Nothing Nothing
         when (os /= os') $ simError $ do
           SimFailedReplayCompare "simOState" t os' os
 
       simStatus
-  where SimOptions {..} = opt
+ where
+  SimOptions {..} = opt
 
 runSimIO
   :: forall p

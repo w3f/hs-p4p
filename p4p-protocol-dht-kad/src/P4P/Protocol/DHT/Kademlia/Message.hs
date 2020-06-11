@@ -259,6 +259,8 @@ data KLogMsg =
   | D_ICmdOReqIgnoreMis !CmdId !ReqId !RequestBody
     -- ^ Ignored a duplicate attempt to forget an outgoing request.
     -- This suggests a minor programming error.
+  -- | D_Msg !String
+  -- -- ^ Generic message, for debugging purposes.
     deriving (Show, Read, Generic, Eq, Ord)
 
 
