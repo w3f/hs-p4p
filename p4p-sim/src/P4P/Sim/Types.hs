@@ -66,6 +66,8 @@ data SimProcState ps i a = SimProcState
 data SimUserI' ps ui i a xi =
     SimProcUserI !Pid !ui
   | SimGetAllPids
+  | SimGetAllInboxSizes
+  | SimGetTickNow
   | SimProcAdd !Pid !(SimProcState ps i a)
   | SimProcDel !Pid
   | SimExtensionI !xi
@@ -79,6 +81,8 @@ type SimUserI ps = SimXUserI ps ()
 data SimUserO' ps uo i a xo =
     SimProcUserO !Pid !uo
   | SimAllPids !(Set Pid)
+  | SimAllInboxSizes !(Map Pid Int)
+  | SimTickNow !Tick
   | SimProcAddResult !Pid !Bool
   | SimProcDelResult !Pid !(Maybe (SimProcState ps i a))
   | SimExtensionO !xo

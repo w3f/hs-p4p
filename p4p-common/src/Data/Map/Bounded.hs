@@ -71,6 +71,9 @@ data BMap k v = BMap
 newBMap :: Ord k => Int -> BMap k v
 newBMap = BMap mempty
 
+sizeBMap1 :: BMap k1 v -> Int
+sizeBMap1 m = M.size (bMap m)
+
 setMap1 :: BMap k v -> M.Map k' v' -> BMap k' v'
 setMap1 m m' = m { bMap = m' }
 
@@ -107,6 +110,9 @@ data BMap2 k1 k2 v = BMap2
 
 newBMap2 :: (Ord k1) => Int -> Int -> BMap2 k1 k2 v
 newBMap2 = BMap2 mempty
+
+sizeBMap2 :: BMap2 k1 k2 v -> Int
+sizeBMap2 m = sum (M.size <$> b2Map m)
 
 setMap2 :: BMap2 k1 k2 v -> M.Map k1' (M.Map k2' v') -> BMap2 k1' k2' v'
 setMap2 m m' = m { b2Map = m' }

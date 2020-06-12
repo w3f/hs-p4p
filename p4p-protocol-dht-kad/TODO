@@ -1,6 +1,5 @@
-- ! there is a memory leak with THUNK_2_0, run with ghc-prof
-
 - ! enforce the bounds on the bounded data structures
+- ! local-only commands should be cleaned up quicker after they ICFinish
 
 - Check that we don't send requests to ourselves. Although it doesn't matter
   too much, we cache and re-use them anyways...

@@ -26,7 +26,7 @@ statePL st predicate xs =
         (hd', i' :<| tl') -> (hd', Just i', tl')
       (!a, !o) = st i
   in  case o of
-        Just o' -> (a, hd >< o' :<| tl)
+        Just o' -> (a, o' `seq` hd >< o' :<| tl)
         Nothing -> (a, hd >< tl)
 
 -- | Insert if not already contained. O(n).

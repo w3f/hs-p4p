@@ -367,7 +367,9 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       -- receives a signal when 'reactM' outputs []
       case simOActWrite simOMsg of
         Nothing -> simUserO $ mapMaybe onlyUser outs
-        Just _  -> pure ()
+        Just _  -> case simIActRead simIMsg of
+          Nothing -> simUserO $ mapMaybe onlyUser outs -- echo back
+          Just _  -> pure ()
 
   pure SimRT { .. }
   where SimOptions {..} = opt
@@ -442,14 +444,13 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
       let os = show ofs
       whenJust (simOActWrite simOState) $ flip hPutStrLn os
       whenJust (simOActCompare simOState) $ \h -> do
-        os' <- annotateRethrow (hGetLine h) $ \e ->
-          annotateIOError e "simOState" Nothing Nothing
+        os' <- annotateRethrow (hGetLine h)
+          $ \e -> annotateIOError e "simOState" Nothing Nothing
         when (os /= os') $ simError $ do
           SimFailedReplayCompare "simOState" t os' os
 
       simStatus
- where
-  SimOptions {..} = opt
+  where SimOptions {..} = opt
 
 runSimIO
   :: forall p

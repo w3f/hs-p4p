@@ -44,8 +44,11 @@ all-300: $(DST_300_SVG) $(DST_300_PNG)
 clean-300:
 	rm -f $(DST_300_SVG) $(DST_300_PNG)
 
+HEIGHT=720
 %.svg: %.hp
-	hp2pretty "$<"
+	hp2pretty --bands 0 --trace 0.1 "$<"
+	sed -i "$@" \
+	  -e "s/width='1280.0' height='720.0'/width='1280.0' height='$(HEIGHT).0'/g"
 
 %.png: %.svg
 	convert "$<" "$@"

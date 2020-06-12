@@ -49,6 +49,8 @@ Common generic
     -- can detect this during development so it doesn't cause surprises later
     GHC-Prof-Options:
       -fprof-auto
+    -- note: blanket-adding -fprof-auto like this can very occasionally give
+    -- memory leaks; disable those on a per-module basis.
   if flag(release)
     GHC-Options:
       -Werror

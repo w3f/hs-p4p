@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns          #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -143,7 +144,14 @@ testingParams speedAuto tickHz = KParams
 defaultParams :: Int -> KParams
 defaultParams = testingParams 1
 
--- FIXME: this probably wants to store tasks for the ping timeouts
+{- | Local info about a node, including its addresses and last-seen timestamps.
+
+Note: since this uses both 'Either' and '(,)' it is very sensitive to space
+leaks. Only use 'nodeUpdateAddr' to update it.
+
+It would be more robust to use the strict types in @strict-base-types@ however
+that adds extra dependencies on @aeson@ and @QuickCheck@.
+-}
 newtype NodeLocalInfo = NodeLocalInfo {
   getNodeInfo :: NodeInfo (Either SC.Tick SC.Tick, NodeAddr)
   -- ^ NodeInfo with its addresses and last-seen timestamps
@@ -176,12 +184,14 @@ nodeLastSeen (NodeLocalInfo NodeInfo {..}) =
 -- old addresses.
 nodeUpdateAddr
   :: Int -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo -> NodeLocalInfo
-nodeUpdateAddr maxSz tick addr nInfo = nInfo & _Wrapped . _niNodeAddr %~ update
+nodeUpdateAddr maxSz !tick addr nInfo =
+  nInfo & _Wrapped . _niNodeAddr %~ update
  where
   update x = snd
     $ S.bStatePL ((==) addr . snd) (S.bPruneL maxSz . S.bSortBy compare) st x
-  st (Just (tick', _)) = ((), Just (max tick tick', addr))
-  st Nothing           = ((), Just (tick, addr))
+  st (Just (!tick', _)) = ((), z `seq` Just (z, addr))
+    where z = max tick tick'
+  st Nothing = ((), Just (tick, addr))
 
 instance Ord NodeLocalInfo where
   compare = compare `on` nodeLastSeen
@@ -283,14 +293,17 @@ checkState State {..} = do
   -- TODO: check data structure sizes are the same as specificed in kParams
   -- TODO: check consistency between ICmdProcess and kSentReq
   checkTaskPending "kSelfCheck" kSelfCheck "SelfCheck"
+  whenJust (SC.checkValidity kSchedule) $ \e -> do
+    throwE $ "schedule not consistent: " <> show e
   void $ kBuckets & itraversed %%@~ \i KBucket {..} -> do
     checkTaskPending ("kBuckets/" <> show i) bRefresh "RefreshBucket"
   void $ kStore & itraversed %%@~ \k StoreEntry {..} -> do
     checkTaskPending ("kStore/" <> show k) sRepub  "RepublishKey"
     checkTaskPending ("kStore/" <> show k) sExpire "ExpireKey"
   checkBounded "kSentReq" kSentReq getSentReqIdx $ \prefix v -> do
-    checkTaskPending prefix (retryTask $ oreqRetry v) "TOOReqReply"
-    checkTaskPending prefix (oreqTimeout v)           "TOOReq"
+    -- TODO: retries are not currently implemented
+    --checkTaskPending prefix (retryTask $ oreqRetry v) "TOOReqReply"
+    checkTaskPending prefix (oreqTimeout v) "TOOReq"
   checkBounded "kRecvReq" kRecvReq getRecvReqIdx $ \prefix v -> do
     checkTaskPending prefix (ireqTimeout v) "TOIReq"
   void $ kRecvCmd & itraversed %%@~ \k ICmdProcess {..} -> do
@@ -304,7 +317,7 @@ checkState State {..} = do
     _                  -> throwE $ n <> ": task not pending: " <> show t
   getSentReqIdx OReqProcess {..} = (dst, ) . Just <$> getReqBody body
     where Msg {..} = oreqMsg
-  getRecvReqIdx IReqProcess {..} = (dst, ) . Just <$> getReqBody body
+  getRecvReqIdx IReqProcess {..} = (src, ) . Just <$> getReqBody body
     where Msg {..} = ireqMsg
   getReqBody (Left  Request {..}) = pure reqBody
   getReqBody (Right rep         ) = throwE $ "not a request: " <> show rep
@@ -364,9 +377,7 @@ newRandomState getEntropy addrs params =
 
 newCmdId :: R.DRG' drg => State drg -> (ReqId, State drg)
 newCmdId s@State {..} = (reqid, s { kRng = kRng' })
- where
-  (reqid, kRng') =
-    R.randomBytesGenerate (fromIntegral (parKeyBytes kParams)) kRng
+  where (reqid, kRng') = R.randomBytesGenerate reqIdWith kRng
 
 newNodeIdR :: R.DRG' drg => Int -> State drg -> (NodeId, State drg)
 newNodeIdR prefixMatching s0 = (nId, s1)

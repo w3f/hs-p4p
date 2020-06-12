@@ -117,6 +117,12 @@ simReact input = execWriterT $ do
       _2 . _simNow .= newNow
     MsgUser SimGetAllPids -> do
       logU $ SimAllPids $ M.keysSet procs
+    MsgUser SimGetAllInboxSizes -> do
+      inboxes <- use $ _2 . _simIn
+      let count inbox = sum (SQ.length <$> inbox)
+      logU $ SimAllInboxSizes $ fmap count inboxes
+    MsgUser SimGetTickNow -> do
+      logU $ SimTickNow realNow
     MsgUser (SimProcAdd pid sp) -> do
       -- insert process
       let SimProcState {..} = sp

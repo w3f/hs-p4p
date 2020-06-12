@@ -150,6 +150,7 @@ data Command = Command
 
 data CommandBody =
     GetNodeId
+  | GetNumOngoingProcs
   | JoinNetwork !(NodeInfo NodeAddr)
   | LookupNode !NodeId
   | LookupValue  !Key
@@ -165,6 +166,7 @@ data CommandReply = CommandReply
 data CommandReplyBody =
     CommandTimedOut !SC.TickDelta
   | OwnNodeId !NodeId
+  | NumOngoingProcs !Int !Int !Int
   | JoinNetworkReply !NodeInfos
   | LookupNodeReply !NodeInfos
   | LookupValueReply !(Either NodeInfos Value)
@@ -253,6 +255,8 @@ data KLogMsg =
     -- ^ A kprocess was deleted.
   | I_KBucketOp !KBucketOp
     -- ^ An operation was performed on our k-buckets.
+  | D_SelfCheckSuccess
+    -- ^ A self-check succeeded.
   | D_ICmdOReqIgnoreDup !CmdId !ReqId !RequestBody
     -- ^ Ignored a duplicate attempt to expect an outgoing request.
     -- This suggests a minor programming error.

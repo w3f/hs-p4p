@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeFamilies          #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
+{-# OPTIONS_GHC -fno-prof-auto #-} -- it space-leaks
 
 module Control.Lens.Mutable.Extra
   ( Const(..)

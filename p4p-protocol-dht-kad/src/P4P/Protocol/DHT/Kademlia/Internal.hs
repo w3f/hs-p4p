@@ -74,7 +74,7 @@ import           Data.Bifunctor                    (first, second)
 import           Data.Foldable                     (for_, toList)
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
-import           Data.Map.Bounded                  (ValueAt (..))
+import           Data.Map.Bounded                  (ValueAt (..), sizeBMap2)
 import           Data.Maybe                        (isNothing)
 import           Data.Tuple                        (swap)
 --import           Debug.Pretty.Simple               (pTraceShowId)
@@ -221,7 +221,7 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
   KParams {..} = kParams
   tick         = case rTick of
     Just t  -> Right t
-    Nothing -> Left (SC.tickNow kSchedule)
+    Nothing -> Left $! SC.tickNow kSchedule
   updateNodeAddr = nodeUpdateAddr (fromIntegral parRepRouting) tick srcAddr
   nodeMatch      = (==) nodeId . nodeIdOf
   newInfo        = newNodeLocalInfo nodeId tick srcAddr
@@ -385,20 +385,20 @@ icmdStart cmd isExternal s0 = flip runStateWT s0 $ do
 -- | Initial lookup subject of a command
 cmdSubj :: NodeId -> CommandBody -> NodeId
 cmdSubj self = \case
-  GetNodeId         -> self
   JoinNetwork _     -> self
   LookupNode  nId   -> nId
   LookupValue key   -> key
   InsertValue key _ -> key
+  c -> error $ "programmer error, invalid argument for cmdSubj: " <> show c
 
 -- | Lookup type of a command
 cmdOReq :: CommandBody -> NodeId -> RequestBody
 cmdOReq = \case
-  GetNodeId       -> error "unreachable"
   JoinNetwork _   -> GetNode
   LookupNode  _   -> GetNode
   LookupValue _   -> GetValue
   InsertValue _ _ -> GetNode
+  c -> error $ "programmer error, invalid argument for cmdOReq: " <> show c
 
 kSimpleLookup
   :: Int
@@ -524,8 +524,13 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
     -- of the below "Set.delete" are nops
 
     (ICNewlyCreated, ICStart) -> case cmdBody of
-      GetNodeId -> finishWithResult $ OwnNodeId $ kSelf s0
-      _         -> do
+      GetNodeId          -> finishWithResult $ OwnNodeId $ kSelf s0
+      GetNumOngoingProcs -> do
+        let oreq = sizeBMap2 (kSentReq s0)
+            ireq = sizeBMap2 (kRecvReq s0)
+            icmd = sizeBMap2 (kSentReq s0)
+        finishWithResult $ NumOngoingProcs oreq ireq icmd
+      _ -> do
         case cmdBody of
           -- "To join the network, a node u must have a contact to an
           -- already participating node w. u inserts w into the appropriate
@@ -605,7 +610,6 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
           stateWT $ icmdOReqRequest cmdId nInfo reqBody
         pure Nothing
       Right res -> cancelExistingOReqs >> case cmdBody of
-        GetNodeId         -> error "unreachable"
         JoinNetwork nInfo -> do
           -- "Finally, u refreshes all k-buckets further away than its
           -- closest neighbor."
@@ -627,6 +631,8 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
           finishWithResult $ LookupValueReply $ Left $ toNodeInfos res
         InsertValue k v -> do
           continueInsert v $ newSimpleQuery res
+        c -> do
+          error $ "programmer error, invalid arg for continueLookup: " <> show c
 
   continueInsert val qs = do
     let (next, qs') = kSimpleInsert (fromIntegral parParallel) qs
@@ -717,7 +723,7 @@ icmdOReqResult cmdId reqDst reqBody rep s0 = flip runStateWT s0 $ do
       case toCmdInput reqDst reqBody rep of
         Nothing -> case rep of
           F.GotResult r -> writeLog $ W_ICmdIgnoredInvalidInput cmdId reqDst r
-          _             -> error "unreachable"
+          F.TimedOut  _ -> error "icmdOReqResult called with TimedOut"
         Just cmdInput ->
           stateWT $ icmdRunInput cmdId cmdProc (Just rep) cmdInput
   where State {..} = s0
@@ -730,9 +736,12 @@ kHandleInput
   -> m ([KadO], State g)
 kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
   P.MsgRT (P.RTTick realNow task) -> case task of
-    SelfCheck -> runExceptT (checkState s0) >>= \case
-      Left  err -> writeLog $ W_SelfCheckFailed err
-      Right ()  -> pure ()
+    SelfCheck -> do
+      runExceptT (checkState s0) >>= \case
+        Left  err -> writeLog $ W_SelfCheckFailed err
+        Right ()  -> writeLog $ D_SelfCheckSuccess
+      t <- _kSchedule %%= SC.after parIntvSelfCheck SelfCheck
+      _kSelfCheck .= t
     RefreshBucket idx -> stateWT $ kRefreshBucket idx
     RepublishKey  key -> do
       let StoreEntry {..} =

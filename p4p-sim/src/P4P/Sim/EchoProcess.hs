@@ -41,6 +41,10 @@ instance Proc EchoState where
   getAddrs = addrs
   localNow _ = 0
   react i s = case i of
-    MsgRT   _   -> ([], s)
+    MsgRT _ ->
+      let k   = count s
+          a   = head $ addrs s
+          msg = [ MsgProc (EMsg a (succ a)) | k `mod` 50 == 0 ]
+      in  (msg, s { count = if k == maxBound then 0 else succ k })
     MsgUser u   -> ([MsgUser u], s) -- echo reply back
     MsgProc msg -> ([], s)

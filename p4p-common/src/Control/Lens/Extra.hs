@@ -7,14 +7,14 @@
 
 module Control.Lens.Extra where
 
-import           Control.Lens               (ALens', Lens, Lens', Over,
-                                             unsafeSingular, (.=), (.~))
+import           Control.Lens               (ALens', Lens', Over,
+                                             unsafeSingular, use, (.=), (.~))
 import           Control.Lens.At            (Index, IxValue, Ixed (..))
 import           Control.Lens.Indexed       (FoldableWithIndex (..),
                                              FunctorWithIndex (..),
                                              TraversableWithIndex (..))
 import           Control.Lens.Unsound       (lensProduct)
-import           Control.Monad.State.Strict (MonadState, get)
+import           Control.Monad.State.Strict (MonadState)
 import           Data.Functor               ((<&>))
 import           Data.Functor.Const         (Const (..))
 import           Data.Functor.Identity      (Identity (..))
@@ -25,13 +25,12 @@ import           GHC.Stack                  (HasCallStack)
 -- | Slightly more powerful version of %%= that can run actions in the same
 -- MonadState. Any changes to the part targeted by the input lens are
 -- overwritten by the final result of the action.
-(%%=!) :: MonadState s m => Lens s s a b -> (a -> m (r, b)) -> m r
-(%%=!) lens f = do
-  s0 <- get
-  let l0 = getConst (lens Const s0) -- annoyingly, can't use (^.)
-  f l0 >>= \(r, l1) -> do
-    lens .= l1
-    pure r
+(%%=!) :: MonadState s m => Lens' s a -> (a -> m (r, a)) -> m r
+(%%=!) l f = do
+  l0      <- use l
+  (r, l1) <- f l0
+  l .= l1
+  pure r
 infix 4 %%=!
 
 -- | More general form of 'lensProduct', needed in certain situations.
