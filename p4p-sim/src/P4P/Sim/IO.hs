@@ -409,8 +409,8 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
     TODO: this is a hack that prevents ctrl-c from quitting the program in
     interactive mode, similar to the behaviour of other REPLs. Without this, it
     is possible for ctrl-c to quit the program if the user is quick and gives
-    the signal *in between* calls to libreadline, since we only ignore
-    UserInterrupt during those calls when it is interrupted.
+    the signal *in between* calls to libreadline [1], since we only ignore
+    Interrupt during those calls when it is interrupted.
 
     However the way this is implemented is a bit shitty, as it prevents a user
     from aborting an computation in interactive mode. (This is possible in
@@ -424,6 +424,12 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
     In non-interactive mode, nothing is changed and the user can abort whenever
     they want, as expected. This exits the program so we don't need to worry
     about restoring previous state, etc.
+
+    [1] With the new haskeline integration, this seems not to happen *in
+    practise* (you need to rm mask below to test it) although in theory it
+    should, perhaps the haskeline event loop is tighter than our old hacky
+    readline event loop... If we are convinced this will never be a problem, we
+    could drop the whole guard mechanism.
     -}
     let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
         guard act = if isInteractiveMode opt

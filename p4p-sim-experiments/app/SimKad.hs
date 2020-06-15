@@ -42,7 +42,7 @@ import           P4P.Sim.Options                  (SimIAction (..),
                                                    _simIOAction)
 import           P4P.Sim.Util                     (ChaChaDRGInsecure, PMut',
                                                    getEntropy)
-import           P4P.Sim.Util.IO                  (bracket, hookAutoJoinQuit,
+import           P4P.Sim.Util.IO                  (bracketHEF, hookAutoJoinQuit,
                                                    optionTerminalStdIO)
 
 
@@ -207,7 +207,7 @@ main = do
 
   let mkStdIO =
         optionTerminalStdIO simOpts "p4p" ".sim-kad_history" "p4p Kad> "
-  bracket mkStdIO snd $ \(stdio, _) -> do
+  bracketHEF mkStdIO $ \stdio -> do
     let joinStarted = \case
           KSimJoinStarted -> True
           _               -> False
