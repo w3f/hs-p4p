@@ -84,6 +84,8 @@ Library
     -- Control.Concurrent.Async
     , async
     , stm
+    -- Statistics.Distribution.Pure
+    , statistics
   HS-Source-Dirs: src
   Exposed-Modules:
     Control.Concurrent.Async.Extra
@@ -99,6 +101,7 @@ Library
     Data.Map.Bounded
     Data.Sequence.Extra
     Data.Type.Reflect
+    Statistics.Distribution.Pure
 
 Test-Suite doctests
   Import: generic, executable

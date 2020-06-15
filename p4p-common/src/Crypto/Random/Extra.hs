@@ -7,7 +7,11 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Crypto.Random.Extra
-  ( DRG'(..)
+  ( randomWord64Generate
+  , randomDoubleGenerate
+  , randomProbGenerate
+  , generateUntil
+  , DRG'(..)
   , initializeFrom
   , ChaChaDRG'
   , ChaChaDRGInsecure
@@ -16,12 +20,42 @@ module Crypto.Random.Extra
   )
 where
 
-import           Crypto.Random
-import           Data.ByteArray             (ByteArray, ByteArrayAccess,
-                                             ScrubbedBytes)
+import qualified Crypto.Cipher.ChaCha.Extra as C
 import qualified Data.ByteArray             as B
 
-import qualified Crypto.Cipher.ChaCha.Extra as C
+import           Crypto.Random
+import           Data.Bits                  (Bits (..))
+import           Data.ByteArray             (ByteArray, ByteArrayAccess,
+                                             ScrubbedBytes)
+import           Data.Word                  (Word64)
+import           Foreign.Storable           (Storable (..))
+import           GHC.Float                  (castWord64ToDouble)
+import           System.IO.Unsafe
+
+
+randomWord64Generate :: DRG g => g -> (Word64, g)
+randomWord64Generate g0 =
+  let (b, g1) = randomBytesGenerate @_ @ScrubbedBytes 8 g0
+  in  (unsafeDupablePerformIO $ B.withByteArray b peek, g1)
+
+randomDoubleGenerate :: DRG g => g -> (Double, g)
+randomDoubleGenerate g0 =
+  let (w, g1) = randomWord64Generate g0 in (castWord64ToDouble w, g1)
+
+-- | Generate a random value between [0, 1).
+randomProbGenerate :: DRG g => g -> (Double, g)
+randomProbGenerate g0 =
+  let (w, g1) = randomWord64Generate g0
+      w12     = (w .&. 0x000fffffffffffff .|. 0x3ff0000000000000) -- some double in [1, 2)
+  in  (castWord64ToDouble w12 - 1.0, g1)
+
+-- | Keep generating a value until it fits a predicate.
+--
+-- >>> let (p, g1) = generateUntil (/= 0.0) randomProbGenerate g0
+generateUntil :: DRG g => (a -> Bool) -> (g -> (a, g)) -> g -> (a, g)
+generateUntil match gen g0 =
+  let (a, g1) = gen g0
+  in  if match a then (a, g1) else generateUntil match gen g1
 
 
 -- | Like 'DRG' but supports initialisation from some arbitrary seed.
