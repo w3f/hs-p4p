@@ -85,7 +85,9 @@ Library
     , async
     , stm
     -- Statistics.Distribution.Pure
+    , math-functions
     , statistics
+    , vector
   HS-Source-Dirs: src
   Exposed-Modules:
     Control.Concurrent.Async.Extra
@@ -101,7 +103,10 @@ Library
     Data.Map.Bounded
     Data.Sequence.Extra
     Data.Type.Reflect
+    Statistics.Distribution.Lognormal
     Statistics.Distribution.Pure
+    Statistics.Distribution.Weibull
+    Statistics.Internal
 
 Test-Suite doctests
   Import: generic, executable
