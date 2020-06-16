@@ -69,7 +69,7 @@ instance D.MaybeEntropy WeibullDistribution where
   maybeEntropy = Just . D.entropy
 
 instance D.ContGen WeibullDistribution where
-  genContVar d = D.genContinuous d
+  genContVar = D.genContinuous
 
 -- | Standard weibull distribution with scale factor (lambda) 1.
 weibullStandard :: Double -> WeibullDistribution

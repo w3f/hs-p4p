@@ -16,8 +16,10 @@ import           Foreign.C.Types                (CInt)
 import           GHC.Generics                   (Generic)
 import           Options.Applicative
 import           Options.Applicative.Help.Chunk
+import           Text.Read                      (readEither)
 
 -- internal
+import           P4P.Sim.Numeric
 import           P4P.Sim.Types
 
 
@@ -310,13 +312,16 @@ data SimOptions = SimOptions
   , simDbgEmptySimX :: !Bool
   -- :^ debugging options
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic)
 makeLenses_ ''SimOptions
 
 isInteractiveMode :: SimOptions -> Bool
 isInteractiveMode opt = case simIActRead (simIMsg (simIOAction opt)) of
   Nothing -> True
   Just _  -> False
+
+knownDistPosReader :: ReadM KnownDistPos
+knownDistPosReader = eitherReader $ readEither >=> distPosToInternal
 
 simOptions :: Parser SimOptions
 simOptions =
@@ -331,7 +336,7 @@ simOptions =
         <> showDefault
         )
     <*> (   SLatAddrIndep
-        <$< option auto
+        <$< option knownDistPosReader
         <|  long "latency"
         <>  metavar "LAT"
         <>  help
@@ -409,7 +414,7 @@ data SimXOptions xo = SimXOptions
   { simOpts  :: !SimOptions
   , simXOpts :: !xo
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic)
 makeLenses_ ''SimXOptions
 
 simXOptions :: Parser xo -> Parser (SimXOptions xo)

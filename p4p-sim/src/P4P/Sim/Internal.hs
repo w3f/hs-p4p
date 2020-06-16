@@ -49,6 +49,7 @@ import           P4P.Proc                         (GMsg (..), ProcAddr,
 import           Safe                             (headNote)
 
 -- internal
+import           P4P.Sim.Numeric
 import           P4P.Sim.Types
 
 
@@ -77,14 +78,11 @@ sampleLatency
   -> ChaChaDRGInsecure
   -> ((TickDelta, addr), ChaChaDRGInsecure)
 sampleLatency s t = \case
-  SLatAddrIndep dist -> sample dist >$> (, s') |> runState
+  SLatAddrIndep dist ->
+    state (sampleDist dist) >$> toTickDelta >$> (, s') |> runState
  where
-  s'     = headNote "simSend got empty addresses" s
-  sample = \case
-    DistConstant k            -> pure k
-    DistLogNormal mean stddev -> error "not implemented"
-    DistWeibull   mean stddev -> error "not implemented"
-      -- see https://stats.stackexchange.com/a/159522
+  s'          = headNote "simSend got empty addresses" s
+  toTickDelta = round
 
 -- TODO: SimT should be a newtype, so it doesn't clash with MonadState
 type SimRunState p = (Map Pid p, SimState (State p))

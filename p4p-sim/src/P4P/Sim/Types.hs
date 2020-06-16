@@ -21,13 +21,16 @@ import           Control.Lens.TH.Extra (makeLenses_)
 import           Crypto.Random.Extra   (ByteArrayAccess, ChaChaDRGInsecure,
                                         initialize)
 import           Data.Map.Strict       (Map)
-import           Data.Schedule         (Tick, TickDelta)
+import           Data.Schedule         (Tick)
 import           Data.Set              (Set)
 import           Data.Void             (Void, absurd)
 import           Data.Word             (Word16)
 import           GHC.Generics          (Generic)
 import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
                                         Protocol (..), RuntimeI, RuntimeO)
+
+-- internal
+import           P4P.Sim.Numeric
 
 
 -- | A pair that is slightly easier to type
@@ -131,19 +134,10 @@ makePrisms ''SimUserI'
 makePrisms ''SimUserO'
 makePrisms ''SimAuxO'
 
--- | A known probability distribution, non-negative.
-data KnownDistNonNeg a =
-    DistConstant !a
-  | DistLogNormal !a !a
-    -- ^ Log-normal-distributed with a given mean and std-dev
-  | DistWeibull !a !a
-    -- ^ Weibull-distributed with a given mean and std-dev
- deriving (Eq, Ord, Show, Read, Generic)
-
 -- | Latency profile.
-data SimLatency = SLatAddrIndep !(KnownDistNonNeg TickDelta)
+data SimLatency = SLatAddrIndep !KnownDistPos
     -- ^ Latency is independent of the addresses.
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic)
 
 -- | State of the simulation.
 --
@@ -155,7 +149,7 @@ data SimState' i a = SimState
   , simAddr    :: !(Map a (Set Pid))
   , simIn      :: !(Map Pid (Map Tick (SQ.Seq i)))
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic)
 makeLenses_ ''SimState'
 type SimState ps = SimState' (GMsgI ps) (PAddr ps)
 

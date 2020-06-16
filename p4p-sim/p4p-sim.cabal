@@ -98,6 +98,7 @@ Library
     P4P.Sim.Extension
     P4P.Sim.Internal
     P4P.Sim.IO
+    P4P.Sim.Numeric
     P4P.Sim.Options
     P4P.Sim.Types
     P4P.Sim.Util

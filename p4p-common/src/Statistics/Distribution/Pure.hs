@@ -1,6 +1,11 @@
 {-# LANGUAGE MultiWayIf #-}
 
-module Statistics.Distribution.Pure where
+module Statistics.Distribution.Pure
+  ( module Statistics.Distribution
+  , drawCont
+  , drawDisc
+  )
+where
 
 import           Crypto.Random.Extra     (DRG (..), generateUntil,
                                           randomProbGenerate)

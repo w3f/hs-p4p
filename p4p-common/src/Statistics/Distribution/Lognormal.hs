@@ -75,7 +75,7 @@ instance D.MaybeEntropy LognormalDistribution where
   maybeEntropy = Just . D.entropy
 
 instance D.ContGen LognormalDistribution where
-  genContVar d = D.genContinuous d
+  genContVar = D.genContinuous
 
 -- | Standard log normal distribution with mu 0 and sigma 1.
 --
