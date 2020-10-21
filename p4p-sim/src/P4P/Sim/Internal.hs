@@ -121,31 +121,36 @@ simReact input = execWriterT $ do
       logU $ SimAllInboxSizes $ fmap count inboxes
     MsgUser SimGetTickNow -> do
       logU $ SimTickNow realNow
+    MsgUser (SimGetState f) -> do
+      simSt <- use _2
+      simPs <- flip M.traverseWithKey procs $ \pid proc -> do
+        spState <- lift2 $ suspend @p proc
+        proc'   <- lift2 $ proceed @p spState
+        _1 . at pid .= Just proc'
+        pure spState
+      when (f >= 1) $ do
+        logU $ simPs `seq` SimGetStateResult simPs simSt
+      when (f == 0) $ do
+        logU $ simPs `seq` SimGetStateResult mempty simSt
     MsgUser (SimProcAdd pid sp) -> do
       -- insert process
-      let SimProcState {..} = sp
       if M.member pid procs
         then logU $ SimProcAddResult pid False
         else do
-          proc <- lift2 $ proceed @p spState
-          _1 . at pid .= Just proc
-          _2 . _simIn . at pid .= Just spInbox
-          for_ spAddr $ \a -> do
-            _2 . _simAddr . at a . nom . contains pid .= True
+          _ <- insProc pid sp
           logU $ SimProcAddResult pid True
+    MsgUser (SimProcGet pid) -> do
+      case M.lookup pid procs of
+        Nothing   -> logU $ SimProcGetResult pid Nothing
+        Just proc -> do
+          sp <- delProc pid proc
+          _  <- insProc pid sp
+          logU $ SimProcGetResult pid $ Just sp
     MsgUser (SimProcDel pid) -> do
-      -- delete process
       case M.lookup pid procs of
         Nothing   -> logU $ SimProcDelResult pid Nothing
         Just proc -> do
-          spState <- lift2 $ suspend @p proc
-          _1 . at pid .= Nothing
-          spInbox <- _2 . _simIn . at pid . nom %%= (, mempty)
-          spAddr  <- _2 . _simAddr . itraversed %%@= \addr pids -> do
-            if S.member pid pids
-              then (S.singleton addr, S.delete pid pids)
-              else (S.empty, pids)
-          let sp = SimProcState { .. }
+          sp <- delProc pid proc
           logU $ SimProcDelResult pid $ Just sp
     MsgUser (SimProcUserI pid userI) -> do
       -- user message to a process
@@ -155,6 +160,29 @@ simReact input = execWriterT $ do
         Just _ -> do
           pushPMsgI realNow pid (MsgUser userI)
  where
+  insProc
+    :: Pid -> SimProcState (State p) (ProcMsgI p) (ProcAddr p) -> SimWT p m p
+  insProc pid sp = do
+    let SimProcState {..} = sp
+    proc <- lift2 $ proceed @p spState
+    _1 . at pid .= Just proc
+    _2 . _simIn . at pid .= Just spInbox
+    for_ spAddr $ \a -> do
+      _2 . _simAddr . at a . nom . contains pid .= True
+    pure proc
+
+  delProc
+    :: Pid -> p -> SimWT p m (SimProcState (State p) (ProcMsgI p) (ProcAddr p))
+  delProc pid proc = do
+    spState <- lift2 $ suspend @p proc
+    _1 . at pid .= Nothing
+    spInbox <- _2 . _simIn . at pid . nom %%= (, mempty)
+    spAddr  <- _2 . _simAddr . itraversed %%@= \addr pids -> do
+      if S.member pid pids
+        then (S.singleton addr, S.delete pid pids)
+        else (S.empty, pids)
+    pure $ SimProcState { .. }
+
   -- pop a single inbox message up-to-and-including @realNow@
   popPMsgI :: Tick -> Pid -> SimWT p m (Maybe (ProcMsgI p))
   popPMsgI realNow pid = _2 . _simIn . at pid . nom %%= \inboxes ->

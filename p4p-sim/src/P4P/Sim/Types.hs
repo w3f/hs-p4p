@@ -41,6 +41,52 @@ data KV k v = !k :~ !v
 -- is not made available to the process themselves.
 type Pid = Word16
 
+-- | Latency profile.
+data SimLatency = SLatAddrIndep !KnownDistPos
+    -- ^ Latency is independent of the addresses.
+  deriving (Eq, Show, Read, Generic)
+
+-- | State of the simulation. Process state is stored separately.
+data SimState' i a = SimState
+  { simNow     :: !Tick
+  , simDRG     :: !ChaChaDRGInsecure
+  , simLatency :: !SimLatency
+  , simAddr    :: !(Map a (Set Pid))
+  , simIn      :: !(Map Pid (Map Tick (SQ.Seq i)))
+  }
+  deriving (Eq, Show, Read, Generic)
+makeLenses_ ''SimState'
+type SimState ps = SimState' (GMsgI ps) (PAddr ps)
+
+newSimState
+  :: (ByteArrayAccess seed, Ord a)
+  => seed
+  -> SimLatency
+  -> Set Pid
+  -> SimState' i a
+newSimState seed latency pids =
+  SimState 0 (initialize seed) latency mempty (M.fromSet (const mempty) pids)
+
+-- | Full state of the simulation, including the state of each process.
+data SimFullState ps xs = SimFullState
+  { simProcs  :: !(Map Pid ps)
+  , simState  :: !(SimState ps)
+  , simXState :: !xs
+  }
+  deriving (Generic, Functor)
+-- note: we are forced to do this (instead of having 'SimFullState' ps i a xs'
+-- like how 'SimState'' is defined) so that we can define @instance Protocol@
+-- in a convenient way - because we can't apply type families in the instance
+-- declaration.
+deriving instance (Eq (Map Pid ps), Eq (SimState ps), Eq xs)
+  => Eq (SimFullState ps xs)
+deriving instance (Ord (Map Pid ps), Ord (SimState ps), Ord xs)
+  => Ord (SimFullState ps xs)
+deriving instance (Show (Map Pid ps), Show (SimState ps), Show xs)
+  => Show (SimFullState ps xs)
+deriving instance (Read (Map Pid ps), Read (SimState ps), Read xs)
+  => Read (SimFullState ps xs)
+
 data SimProcEvt' i o a =
   -- | A process received a message.
     SimMsgRecv !Pid !i
@@ -71,7 +117,9 @@ data SimUserI' ps ui i a xi =
   | SimGetAllPids
   | SimGetAllInboxSizes
   | SimGetTickNow
+  | SimGetState
   | SimProcAdd !Pid !(SimProcState ps i a)
+  | SimProcGet !Pid
   | SimProcDel !Pid
   | SimExtensionI !xi
     -- ^ extension input type
@@ -86,11 +134,13 @@ data SimUserO' ps uo i a xo =
   | SimAllPids !(Set Pid)
   | SimAllInboxSizes !(Map Pid Int)
   | SimTickNow !Tick
+  | SimGetStateResult !(Map Pid ps) !(SimState' i a) -- isomorphic to 'SimFullState ps ()'
   | SimProcAddResult !Pid !Bool
+  | SimProcGetResult !Pid !(Maybe (SimProcState ps i a))
   | SimProcDelResult !Pid !(Maybe (SimProcState ps i a))
   | SimExtensionO !xo
     -- ^ extension output type
- deriving (Eq, Ord, Show, Read, Generic, Functor)
+ deriving (Eq, Show, Read, Generic, Functor)
 type SimXUserO ps xs
   = SimUserO' ps (UserO ps) (GMsgI ps) (PAddr ps) (XUserO xs)
 type SimUserO ps = SimXUserO ps ()
@@ -101,6 +151,15 @@ data SimAuxO' ao i o a =
   -- :^ TODO: filter out User messages, these are already represented elsewhere
  deriving (Eq, Ord, Show, Read, Generic)
 type SimAuxO ps = SimAuxO' (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
+
+data SimError = SimFailedReplayCompare
+  { simFailedReplayCompareType     :: !String
+  , simFailedReplayCompareTick     :: !Tick
+  , simFailedReplayCompareExpected :: !String
+  , simFailedReplayCompareActual   :: !String
+  }
+    -- ^ Failed to compare replay at the given tick.
+  deriving (Eq, Ord, Show, Read, Generic)
 
 class (
   PMsg xs ~ Void,
@@ -133,61 +192,6 @@ instance SimXProtocol ps () where
 makePrisms ''SimUserI'
 makePrisms ''SimUserO'
 makePrisms ''SimAuxO'
-
--- | Latency profile.
-data SimLatency = SLatAddrIndep !KnownDistPos
-    -- ^ Latency is independent of the addresses.
-  deriving (Eq, Show, Read, Generic)
-
--- | State of the simulation.
---
--- Note that process state is stored separately.
-data SimState' i a = SimState
-  { simNow     :: !Tick
-  , simDRG     :: !ChaChaDRGInsecure
-  , simLatency :: !SimLatency
-  , simAddr    :: !(Map a (Set Pid))
-  , simIn      :: !(Map Pid (Map Tick (SQ.Seq i)))
-  }
-  deriving (Eq, Show, Read, Generic)
-makeLenses_ ''SimState'
-type SimState ps = SimState' (GMsgI ps) (PAddr ps)
-
-newSimState
-  :: (ByteArrayAccess seed, Ord a)
-  => seed
-  -> SimLatency
-  -> Set Pid
-  -> SimState' i a
-newSimState seed latency pids =
-  SimState 0 (initialize seed) latency mempty (M.fromSet (const mempty) pids)
-
-data SimError = SimFailedReplayCompare
-  { simFailedReplayCompareType     :: !String
-  , simFailedReplayCompareTick     :: !Tick
-  , simFailedReplayCompareExpected :: !String
-  , simFailedReplayCompareActual   :: !String
-  }
-    -- ^ Failed to compare replay at the given tick.
-  deriving (Eq, Ord, Show, Read, Generic)
-
--- | Full state of the simulation.
-data SimFullState ps xs = SimFullState
-  { simProcs  :: !(Map Pid ps)
-  , simState  :: !(SimState ps)
-  , simXState :: !xs
-  }
-  deriving (Generic, Functor)
--- note: we are forced to do this to define @instance Protocol@, because we
--- can't apply type families in the instance declaration.
-deriving instance (Eq (Map Pid ps), Eq (SimState ps), Eq xs)
-  => Eq (SimFullState ps xs)
-deriving instance (Ord (Map Pid ps), Ord (SimState ps), Ord xs)
-  => Ord (SimFullState ps xs)
-deriving instance (Show (Map Pid ps), Show (SimState ps), Show xs)
-  => Show (SimFullState ps xs)
-deriving instance (Read (Map Pid ps), Read (SimState ps), Read xs)
-  => Read (SimFullState ps xs)
 
 instance SimXProtocol ps xs => Protocol (SimFullState ps xs) where
   type PMsg (SimFullState ps xs) = Void
