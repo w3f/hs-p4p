@@ -11,3 +11,6 @@
 - ignore: {name: Use hPrint}
 - ignore: {name: Use isNothing}
 - ignore: {name: Use <}
+
+- modules:
+  - {name: Control.Lens, badidents: [At, Ixed, at, ix, sans], message: "Use versions from our Control.Lens.Strict instead"}

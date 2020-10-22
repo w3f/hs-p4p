@@ -117,7 +117,7 @@ data SimUserI' ps ui i a xi =
   | SimGetAllPids
   | SimGetAllInboxSizes
   | SimGetTickNow
-  | SimGetState
+  | SimGetState !Int
   | SimProcAdd !Pid !(SimProcState ps i a)
   | SimProcGet !Pid
   | SimProcDel !Pid

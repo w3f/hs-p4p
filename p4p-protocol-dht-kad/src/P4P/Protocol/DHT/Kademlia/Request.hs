@@ -16,11 +16,13 @@ import qualified Control.Schedule.Future           as F
 import qualified Crypto.Random.Extra               as R
 import qualified Data.Map.Bounded                  as BM
 import qualified Data.Map.Strict                   as M
+import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
 
-import           Control.Lens                      (Lens', at, sans, use, (%%=),
-                                                    (%=), (.=))
+import           Control.Lens                      (Lens', use, (%%=), (%=),
+                                                    (.=))
 import           Control.Lens.Extra                (at_, (%%=!))
+import           Control.Lens.Strict               (at, sans)
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad.Trans.State.Strict  (runState, state)
 import           Data.Map.Bounded                  (ValueAt (..))
@@ -32,7 +34,10 @@ import           P4P.Protocol.DHT.Kademlia.Message
 
 
 assertNowRunning
-  :: HasCallStack => SC.Task t -> SC.Schedule t -> ((), SC.Schedule t)
+  :: HasCallStack
+  => SC.Task KTask
+  -> SC.Schedule KTask
+  -> ((), SC.Schedule KTask)
 assertNowRunning k sch = case SC.taskStatus k sch of
   SC.TaskRunning _ -> ((), sch)
   _                -> error "assertNowRunning: assertion failed"
@@ -178,7 +183,7 @@ oreqEnsure
   => Lens' s drg
   -> Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
-  -> Lens' s (M.Map ReqId (NodeId, RequestBody))
+  -> Lens' s (M.Map ReqId (Z.Pair NodeId RequestBody))
   -> (SC.TickDelta, SC.TickDelta)
   -> (SC.Tick -> Request -> Msg)
   -> NodeId
@@ -204,7 +209,7 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
                                  , oreqRetry   = RetryState 0 lt'
                                  , oreqFuture  = F.SFWaiting mempty
                                  }
-      loreqId . at reqId .= Just (reqDst, reqBody)
+      loreqId . at reqId .= Just (reqDst Z.:!: reqBody)
       pure ([P.MsgProc request, kLog $ I_KProcessNew kproc], Present oreqProc)
  where
   (timeout, timeoutRetry) = par
@@ -219,7 +224,7 @@ oreqDelete
   :: HasCallStack
   => Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
-  -> Lens' s (M.Map ReqId (NodeId, RequestBody))
+  -> Lens' s (M.Map ReqId (Z.Pair NodeId RequestBody))
   -> NodeId
   -> RequestBody
   -> s

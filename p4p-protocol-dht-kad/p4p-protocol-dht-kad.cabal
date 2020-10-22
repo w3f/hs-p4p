@@ -74,6 +74,7 @@ Library
     , lens
     , safe
     , schedule
+    , strict
     , transformers
     , vector
 --    , pretty-simple

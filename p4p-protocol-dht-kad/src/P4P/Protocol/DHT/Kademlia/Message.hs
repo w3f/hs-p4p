@@ -19,10 +19,9 @@ import           Control.Lens.TH.Extra  (makeLenses_)
 import           GHC.Generics           (Generic)
 import           GHC.Stack              (HasCallStack)
 
-
 {- | * External message types and other definitions. -}
 
-type NodeAddr = String -- TODO: real address
+type NodeAddr = BS.ByteString -- TODO: real address
 type Value = BS.ByteString
 type ReqId = BS.ByteString -- TODO: h-bit string, TODO: enforce h
 type Key = BS.ByteString -- TODO: h-bit string, TODO: enforce h

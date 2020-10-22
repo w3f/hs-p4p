@@ -12,12 +12,13 @@
 module P4P.Proc.Internal where
 
 -- external
-import           Control.Monad (join, void)
+import           Control.Monad       (join, void)
+import           Control.Monad.Extra (whileJustM)
 import           Control.Op
-import           Data.Kind     (Constraint, Type)
-import           Data.Schedule (Tick, whileJustM)
-import           Data.Void     (Void)
-import           GHC.Generics  (Generic)
+import           Data.Kind           (Constraint, Type)
+import           Data.Schedule       (Tick)
+import           Data.Void           (Void)
+import           GHC.Generics        (Generic)
 
 
 {- | Protocol message. -}

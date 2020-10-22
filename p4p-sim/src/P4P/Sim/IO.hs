@@ -16,7 +16,7 @@ import qualified Data.Set                       as S
 
 import           Control.Clock                  (Clocked (..))
 import           Control.Monad                  (forever, join, void, when)
-import           Control.Monad.Extra            (whenJust)
+import           Control.Monad.Extra            (untilJustM, whenJust)
 import           Control.Op
 import           Data.Either                    (fromRight, lefts)
 import           Data.Foldable                  (for_, toList, traverse_)
@@ -67,17 +67,10 @@ import           P4P.Sim.Options                (SimIAction (..),
                                                  SimLogging (..),
                                                  SimOAction (..),
                                                  SimOptions (..),
-                                                 isInteractiveMode)
+                                                 isInteractiveMode,
+                                                 systemEmptyFile)
 import           P4P.Sim.Types
 
-
--- TODO: export to upstream extra
-untilJustM :: Monad m => m (Maybe a) -> m a
-untilJustM act = go
- where
-  go = act >>= \case
-    Just r  -> pure r
-    Nothing -> go
 
 hGetLineOrEOF :: Handle -> IO (Maybe String)
 hGetLineOrEOF h = catchIOError
@@ -332,9 +325,10 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       pure $ (input, pure ())
 
   simErrors <- newTVarIO []
+  devnull   <- openFile systemEmptyFile AppendMode
 
   let
-    simClose = simIClose
+    simClose = simIClose >> hClose devnull
     simError e = atomically $ modifyTVar' simErrors $ \ee -> (: ee) $! e
     simStatus = readTVarIO simErrors >$> \case
       [] -> Right ()
@@ -344,6 +338,7 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       i <- simI
       whenJust (simIActWrite simIMsg) $ \h -> do
         whenJust i $ hPutStrLn h . show
+      hPutStrLn devnull $ show i -- force to avoid thunks
       pure i
 
     ignoreAux = \case
@@ -404,6 +399,7 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
           annotateIOError e "simIState" Nothing Nothing
         pure (readNote "simIState read failed" r)
     whenJust (simIActWrite simIState) $ flip hPutStrLn (show ifs)
+    appendFile systemEmptyFile $ show ifs <> "\n" -- force to avoid thunks
 
     {-
     TODO: this is a hack that prevents ctrl-c from quitting the program in

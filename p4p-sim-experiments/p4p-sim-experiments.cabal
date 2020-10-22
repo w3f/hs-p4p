@@ -70,6 +70,7 @@ Executable sim-kad
     , p4p-proc
     , p4p-protocol-dht-kad
     , p4p-common
+    , bytestring
     , containers
     , lens
     , op

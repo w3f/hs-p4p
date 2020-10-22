@@ -18,12 +18,12 @@ import qualified Data.Sequence                    as Seq
 import           Control.Applicative              (liftA2)
 import           Control.Lens                     ((%%=), (%=), (^.), _1, _2,
                                                    _3)
+import           Control.Monad.Extra              (whileJustM)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State.Strict (StateT (..), execStateT)
 import           Data.Bifunctor                   (Bifunctor (..))
 import           Data.Can                         (Can (..))
 import           Data.Foldable                    (toList, traverse_)
-import           Data.Schedule                    (whileJustM)
 import           Data.Sequence                    (Seq (..), (|>))
 import           Data.Traversable                 (for)
 

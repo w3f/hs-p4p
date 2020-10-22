@@ -10,6 +10,7 @@
 {-# LANGUAGE UndecidableInstances  #-}
 
 -- external
+import qualified Data.ByteString.Char8            as BS
 import qualified Data.Map.Strict                  as M
 import qualified Data.Sequence.Extra              as Seq
 import qualified Data.Set                         as S
@@ -49,8 +50,8 @@ import           P4P.Sim.Util.IO                  (bracketHEF, hookAutoJoinQuit,
 type KS = KState ChaChaDRGInsecure
 type KProc = PMut' KS
 
-mkAddr :: Pid -> String
-mkAddr p = "addr:" <> show p
+mkAddr :: Pid -> NodeAddr
+mkAddr p = BS.pack $ "addr:" <> show p
 
 mkPState :: KParams -> Pid -> IO KS
 mkPState params p =

@@ -14,6 +14,7 @@ module P4P.Protocol.DHT.Kademlia.Command where
 import qualified Control.Monad.Schedule            as SC
 import qualified Control.Schedule.Future           as F
 import qualified Data.Map.Bounded                  as BM
+import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
 
 import           Control.Lens                      (Lens', itraversed, use,
@@ -22,9 +23,8 @@ import           Control.Lens.Extra                (at_, unsafeIx, (%%=!))
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad.Trans.State.Strict  (runState, state)
 import           Data.Foldable                     (toList)
-import           Data.Map                          (Map)
 import           Data.Map.Bounded                  (ValueAt (..))
-import           Data.Maybe                        (isNothing)
+import           Data.Map.Strict                   (Map)
 import           Data.Set                          (Set)
 import           GHC.Generics                      (Generic)
 import           GHC.Stack                         (HasCallStack)
@@ -92,11 +92,11 @@ type ICmdState' = ICmdState (SimpleQuery ()) (SimpleQuery SC.TickDelta)
 data ICmdProcess = ICmdProcess
   { icmdCmd      :: !Command
   , icmdTimeout  :: !(SC.Task KTask)
-  , icmdExpect   :: !(F.SExpect (NodeId, RequestBody) KTask)
+  , icmdExpect   :: !(F.SExpect (Z.Pair NodeId RequestBody) KTask)
   -- ^ SExpect for outstanding sent requests.
   -- SExpect timeout tasks are of type TOICmdOReq.
   -- SFuture timeout tasks are of type TOOReq.
-  , icmdResult   :: !(Maybe CommandReplyBody)
+  , icmdResult   :: !(Z.Maybe CommandReplyBody)
   -- ^ Some commands give a result, and then have to perform some extra
   -- follow-up work, e.g. 'JoinNetwork' / 'LookupValue'. This field caches the
   -- result in the meantime, which can be resent to duplicate commands.
@@ -114,9 +114,9 @@ cmdUserReply cmdId replyBody = P.MsgUser $ CommandReply cmdId $ Right replyBody
 
 type RunSExpect' s r v
   =  Lens' s (F.SFuture CmdId r)
-  -> Lens' s (F.SExpect (NodeId, RequestBody) KTask)
+  -> Lens' s (F.SExpect (Z.Pair NodeId RequestBody) KTask)
   -> Lens' s (SC.Schedule KTask)
-  -> (NodeId, RequestBody)
+  -> Z.Pair NodeId RequestBody
   -> CmdId
   -> v
 
@@ -126,11 +126,11 @@ sExpect_
   -> Lens' s (BM.BMap CmdId ICmdProcess)
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> RunSExpect' s (F.TimedResult () ReplyBody) v
-  -> (NodeId, RequestBody)
+  -> Z.Pair NodeId RequestBody
   -> CmdId
   -> v
 sExpect_ lsched licmd loreq f reqKey cmdId = f
-  (loreq . unsafeIx reqKey . _oreqFuture)
+  (loreq . unsafeIx (Z.toLazy reqKey) . _oreqFuture)
   (licmd . unsafeIx cmdId . _icmdExpect)
   lsched
   reqKey
@@ -152,8 +152,8 @@ icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
       -- TODO(retry): should we resend below? we are doing so currently, but we
       -- do assume Commands come in through a reliable channel
       let out = case (icmdResult cmdProc, icmdExternal cmdProc) of
-            (Just reply, True) -> [cmdUserReply cmdId reply]
-            _                  -> []
+            (Z.Just reply, True) -> [cmdUserReply cmdId reply]
+            _                    -> []
       pure (out <> [kLog $ I_KProcessIgnoreDup kproc], Present cmdProc)
     Absent False -> do
       -- not enough space left in map, rate-limit them
@@ -164,7 +164,7 @@ icmdEnsure lsched licmd loreq cmd isExternal timeout = runState $ do
       let cmdProc = ICmdProcess { icmdCmd      = cmd
                                 , icmdTimeout  = lt
                                 , icmdExpect   = mempty
-                                , icmdResult   = Nothing
+                                , icmdResult   = Z.Nothing
                                 , icmdState    = ICNewlyCreated
                                 , icmdExternal = isExternal
                                 }
@@ -187,7 +187,7 @@ icmdOReqExpect_
   -> ([KadO], s)
 icmdOReqExpect_ lsched licmd loreq to cmdId reqDst reqBody runR = runState $ do
   let tk     = TOICmdOReq cmdId reqDst reqBody
-  let reqKey = (reqDst, reqBody)
+  let reqKey = reqDst Z.:!: reqBody
   res <- state $ do
     sExpect_ lsched licmd loreq F.sExpectFuture reqKey cmdId to tk
   case res of
@@ -206,7 +206,7 @@ icmdOReqCancel_
   -> s
   -> ([KadO], s)
 icmdOReqCancel_ lsched licmd loreq cmdId reqDst reqBody = runState $ do
-  let reqKey = (reqDst, reqBody)
+  let reqKey = reqDst Z.:!: reqBody
   res <- state $ sExpect_ lsched licmd loreq F.sExpectCancel reqKey cmdId
   case res of
     Left  e  -> pure [kLog $ D_ICmdOReqIgnoreMis cmdId reqDst reqBody]
@@ -227,7 +227,7 @@ oreqResultFuture_ lsched licmd loreq result reqDst reqBody runW = runState $ do
     (loreq . unsafeIx (reqDst, reqBody) . _oreqFuture)
     (licmd . itraversed <. _icmdExpect)
     lsched
-    (reqDst, reqBody)
+    (reqDst Z.:!: reqBody)
     result
   case res of
     Left  e -> pure [kLog $ I_OReqIgnoreDupReply reqDst reqBody]
@@ -242,7 +242,7 @@ icmdCancelAll_
   -> ([KadO], s)
 icmdCancelAll_ lsched licmd loreq cmdId = runState $ do
   sse <- use $ licmd . unsafeIx cmdId . _icmdExpect . F._seExpects
-  e   <- sse & itraversed %%@~ \(reqDst, reqBody) lt -> do
+  e   <- sse & itraversed %%@~ \(reqDst Z.:!: reqBody) lt -> do
     state $ icmdOReqCancel_ lsched licmd loreq cmdId reqDst reqBody
   pure (concat (toList e))
 
@@ -264,7 +264,7 @@ icmdDelete lsched licmd loreq cmdId timeout = runState $ do
       -- send a timeout reply if the command had produced no reply so far
       let out =
             [ cmdUserReply cmdId (CommandTimedOut timeout)
-            | icmdExternal cmdProc && isNothing (icmdResult cmdProc)
+            | icmdExternal cmdProc && Z.isNothing (icmdResult cmdProc)
             ]
       pure (errors <> out <> [kLog $ I_KProcessDel $ KPICmd cmdId], Absent True)
     _ -> error $ "icmdDelete: called on non-existent process: " <> show cmdId

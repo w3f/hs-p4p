@@ -21,6 +21,13 @@ Abstractions
 - how to deal with storage, e.g. disk access
 
 
+Technical debt
+==============
+
+- update crypto interface
+- use Serialise instead of Read/Show, helps with diffing later
+
+
 Low-level features
 ==================
 

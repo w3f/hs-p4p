@@ -9,10 +9,11 @@ module Control.Lens.Extra where
 
 import           Control.Lens               (ALens', Lens', Over,
                                              unsafeSingular, use, (.=), (.~))
-import           Control.Lens.At            (Index, IxValue, Ixed (..))
+import           Control.Lens.At            (Index, IxValue)
 import           Control.Lens.Indexed       (FoldableWithIndex (..),
                                              FunctorWithIndex (..),
                                              TraversableWithIndex (..))
+import           Control.Lens.Strict        (Ixed (..))
 import           Control.Lens.Unsound       (lensProduct)
 import           Control.Monad.State.Strict (MonadState)
 import           Data.Functor               ((<&>))

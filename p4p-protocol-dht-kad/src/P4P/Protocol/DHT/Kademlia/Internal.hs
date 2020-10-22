@@ -53,14 +53,15 @@ import qualified Data.Map.Strict                   as M
 import qualified Data.Schedule                     as SC
 import qualified Data.Sequence.Extra               as S
 import qualified Data.Set                          as Set
+import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
 import qualified P4P.Proc.Lens                     as P
 
-import           Control.Lens                      (Lens', at, ix, sans, use,
-                                                    (%%=), (%%~), (%=), (.=),
-                                                    (^?))
+import           Control.Lens                      (Lens', use, (%%=), (%%~),
+                                                    (%=), (.=), (^?))
 import           Control.Lens.Extra                (at_, unsafeIx, (%%=!),
                                                     (%&&&%))
+import           Control.Lens.Strict               (at, ix, sans)
 import           Control.Monad                     (unless, when)
 import           Control.Monad.Extra               (whenJust)
 import           Control.Monad.Schedule            (tickTask)
@@ -75,7 +76,6 @@ import           Data.Foldable                     (for_, toList)
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
 import           Data.Map.Bounded                  (ValueAt (..), sizeBMap2)
-import           Data.Maybe                        (isNothing)
 import           Data.Tuple                        (swap)
 --import           Debug.Pretty.Simple               (pTraceShowId)
 import           Safe                              (fromJustNote)
@@ -220,8 +220,8 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
   State {..}   = s0
   KParams {..} = kParams
   tick         = case rTick of
-    Just t  -> Right t
-    Nothing -> Left $! SC.tickNow kSchedule
+    Just t  -> Right t -- FIXME: strict
+    Nothing -> Left (SC.tickNow kSchedule)
   updateNodeAddr = nodeUpdateAddr (fromIntegral parRepRouting) tick srcAddr
   nodeMatch      = (==) nodeId . nodeIdOf
   newInfo        = newNodeLocalInfo nodeId tick srcAddr
@@ -230,7 +230,7 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
   -- existing node to ping, to maybe replace it with (if the ping fails).
   bEntriesTryInsert e0 = flip runState e0 $ do
     -- Is the node already in this k-bucket?
-    maybeOp <- state $ S.bStatePL (nodeMatch . fst) id $ \case
+    maybeOp <- state $ S.bStatePL (nodeMatch . Z.fst) id $ \case
         -- note, in this implementation we explicitly store the timestamp of each
         -- node rather than "moving it to the tail".
       Just ent -> if isReply
@@ -250,9 +250,9 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
                                   "pending"
                                   nodeId
           in  ( Just $ KBucketNodePingCheckSuccess
-                (nodeIdOf (fromJustNote errmsg $ snd ent))
+                (nodeIdOf (fromJustNote errmsg $ Z.toLazy $ Z.snd ent))
                 nodeId
-              , Just (updateNodeAddr (fst ent), Nothing)
+              , Just (updateNodeAddr (Z.fst ent) Z.:!: Z.Nothing)
               )
         else
           (Just $ KBucketNodeAlreadyIn nodeId, Just (first updateNodeAddr ent))
@@ -262,7 +262,7 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
         -- new sender at the tail of the list."
         then
           ( Just $ KBucketNodeInserted nodeId
-          , Just (updateNodeAddr newInfo, Nothing)
+          , Just (updateNodeAddr newInfo Z.:!: Z.Nothing)
           )
         -- "If the appropriate k-bucket is full, however, then the recipient
         -- pings the k-bucket’s least-recently seen node to decide what to do"
@@ -272,12 +272,13 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
       Just op -> pure (op, Nothing)
       Nothing -> do
         -- Node not in this k-bucket, and potentially should be added
-        alreadyPending <- state $ S.bStatePL (any nodeMatch . snd) id $ \case
+        alreadyPending <- state $ S.bStatePL (any nodeMatch . Z.snd) id $ \case
           -- Node already pending, bump its nodeAddr and return the corresponding
           -- active node that is awaiting a ping, we may want to ping it again.
-          Just ent -> (Just (fst ent), Just (second (fmap updateNodeAddr) ent))
+          Just ent ->
+            (Just (Z.fst ent), Just (second (fmap updateNodeAddr) ent))
           -- Node not pending, go to next block
-          Nothing  -> (Nothing, Nothing)
+          Nothing -> (Nothing, Nothing)
 
         case alreadyPending of
           Just nInfo ->
@@ -285,12 +286,12 @@ insertNodeId rTick isReply nodeId srcAddr s0 = flip runStateWT s0 $ do
           Nothing -> do
             -- Node not pending, select the least-recently seen node with no pending
             modify $ S.bSortBy compare
-            state $ S.bStatePL (isNothing . snd) id $ \case
+            state $ S.bStatePL (Z.isNothing . Z.snd) id $ \case
               Just ent ->
-                ( ( KBucketNodePingCheckStart nodeId (nodeIdOf (fst ent))
-                  , Just (fst ent)
+                ( ( KBucketNodePingCheckStart nodeId (nodeIdOf (Z.fst ent))
+                  , Just (Z.fst ent)
                   )
-                , Just (fst ent, Just newInfo)
+                , Just (Z.fst ent Z.:!: Z.Just newInfo)
                 )
               Nothing ->
                 -- No more pending spaces left, have to ignore
@@ -307,7 +308,7 @@ insertNodeIdTOReqPing realNow nodeId s0 = flip runStateWT s0 $ do
       error "insertNodeIdTOReqPing failed to find corresponding Ping request"
   unless alreadySucceeded $ do
     r <- state $ kBucketModifyAtNode nodeId $ _bEntries %%~ do
-      S.bStatePL (nodeMatch . fst) (S.bSortBy compare) $ \case
+      S.bStatePL (nodeMatch . Z.fst) (S.bSortBy compare) $ \case
         Just ent ->
           -- I-insert-node-lru-fail-ping
           let
@@ -315,10 +316,10 @@ insertNodeIdTOReqPing realNow nodeId s0 = flip runStateWT s0 $ do
                                   (kSelf s0)
                                   "pending"
                                   nodeId
-            pendingNode = fromJustNote errmsg $ snd ent
+            pendingNode = fromJustNote errmsg $ Z.toLazy $ Z.snd ent
           in
             ( KBucketNodePingCheckFail (nodeIdOf pendingNode) nodeId
-            , Just (pendingNode, Nothing)
+            , Just (pendingNode Z.:!: Z.Nothing)
             )
         Nothing -> error $ nodeNotFound "KBucketNodePingCheckFail"
                                         (kSelf s0)
@@ -482,7 +483,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
   whenJust reply $ \r -> do
     when (icmdExternal cmdProc) $ do
       lift $ tell [P.MsgUser $ CommandReply cmdId $ Right r]
-    _kRecvCmd . unsafeIx cmdId . _icmdResult .= Just r
+    _kRecvCmd . unsafeIx cmdId . _icmdResult .= Z.Just r
  where
   State { kParams }   = s0
   KParams {..}        = kParams
@@ -813,7 +814,7 @@ kInput input s0 = flip runStateWT s0 $ do
   let (oreqProc', maybePing, maybeDst) = case input of
         P.MsgProc recvMsg@Msg {..} -> case body of
           Right Reply {..} ->
-            ( kSentReqId ^? ix repReqId >>= \k -> kSentReq ^? ix k
+            ( kSentReqId ^? ix repReqId >>= \k -> kSentReq ^? ix (Z.toLazy k)
             , P.MsgProc <$> pingReplyToRequest recvMsg
             , Just (dst, recvMsg)
             )

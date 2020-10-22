@@ -92,6 +92,7 @@ Library
   Exposed-Modules:
     Control.Concurrent.Async.Extra
     Control.Lens.Extra
+    Control.Lens.Strict
     Control.Lens.Mutable.Extra
     Control.Lens.TH.Extra
     Control.Monad.Compat.Extra

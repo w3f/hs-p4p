@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns          #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -20,13 +19,15 @@ import qualified Data.ByteString                   as BS
 import qualified Data.Map.Bounded                  as BM
 import qualified Data.Map.Strict                   as M
 import qualified Data.Sequence.Extra               as S
+import qualified Data.Strict                       as Z
 import qualified Data.Vector                       as V
 
 import           Control.Applicative               (liftA2)
-import           Control.Lens                      (itraversed, ix, traversed,
+import           Control.Lens                      (itraversed, traversed,
                                                     (%%@~), (%%~), (%~), (^?!),
                                                     _Wrapped)
 import           Control.Lens.Extra                (unsafeIx)
+import           Control.Lens.Strict               (Ixed (..))
 import           Control.Lens.TH                   (makeWrapped)
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad                     (void)
@@ -145,15 +146,9 @@ defaultParams :: Int -> KParams
 defaultParams = testingParams 1
 
 {- | Local info about a node, including its addresses and last-seen timestamps.
-
-Note: since this uses both 'Either' and '(,)' it is very sensitive to space
-leaks. Only use 'nodeUpdateAddr' to update it.
-
-It would be more robust to use the strict types in @strict-base-types@ however
-that adds extra dependencies on @aeson@ and @QuickCheck@.
 -}
 newtype NodeLocalInfo = NodeLocalInfo {
-  getNodeInfo :: NodeInfo (Either SC.Tick SC.Tick, NodeAddr)
+  getNodeInfo :: NodeInfo (Z.Pair (Z.Either SC.Tick SC.Tick) NodeAddr)
   -- ^ NodeInfo with its addresses and last-seen timestamps
   -- Left t means the timestamp is a local receipt timestamp of some non-reply
   -- message. Right t means the timestamp is of a reply to a previous ReqId
@@ -167,31 +162,34 @@ newNodeLocalInfo
   :: NodeId -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo
 newNodeLocalInfo nodeId seen nodeAddr = NodeLocalInfo NodeInfo
   { niNodeId   = nodeId
-  , niNodeAddr = pure (seen, nodeAddr)
+  , niNodeAddr = pure (Z.toStrict seen Z.:!: nodeAddr)
   }
 
 nodeIdOf :: NodeLocalInfo -> NodeId
 nodeIdOf (NodeLocalInfo NodeInfo {..}) = niNodeId
 
 nodeInfoOf :: NodeLocalInfo -> NodeInfo NodeAddr
-nodeInfoOf (NodeLocalInfo nInfo) = fmap snd nInfo
+nodeInfoOf (NodeLocalInfo nInfo) = fmap Z.snd nInfo
 
 nodeLastSeen :: NodeLocalInfo -> (SC.Tick, NodeId)
 nodeLastSeen (NodeLocalInfo NodeInfo {..}) =
-  (either id id $ maximumBound (Left 0) (fst <$> niNodeAddr), niNodeId)
+  ( either id id $ maximumBound (Left 0) (Z.toLazy . Z.fst <$> niNodeAddr)
+  , niNodeId
+  )
 
 -- | Update one of the addresses in a 'NodeLocalInfo', possibly pruning some
 -- old addresses.
 nodeUpdateAddr
   :: Int -> Either SC.Tick SC.Tick -> NodeAddr -> NodeLocalInfo -> NodeLocalInfo
-nodeUpdateAddr maxSz !tick addr nInfo =
-  nInfo & _Wrapped . _niNodeAddr %~ update
+nodeUpdateAddr maxSz tick addr nInfo = nInfo & _Wrapped . _niNodeAddr %~ update
  where
-  update x = snd
-    $ S.bStatePL ((==) addr . snd) (S.bPruneL maxSz . S.bSortBy compare) st x
-  st (Just (!tick', _)) = ((), z `seq` Just (z, addr))
-    where z = max tick tick'
-  st Nothing = ((), Just (tick, addr))
+  update x = snd $ S.bStatePL ((==) addr . Z.snd)
+                              (S.bPruneL maxSz . S.bSortBy compare)
+                              st
+                              x
+  st (Just (tick' Z.:!: _)) = ((), Just (z Z.:!: addr))
+    where z = max (Z.toStrict tick) tick'
+  st Nothing = ((), Just (Z.toStrict tick Z.:!: addr))
 
 instance Ord NodeLocalInfo where
   compare = compare `on` nodeLastSeen
@@ -210,7 +208,7 @@ distanceLeadingZeros dist = either id id $ foldl' f (Left 0) $ fmap
   f (Left  x) a = if a == 8 then Left (x + a) else Right (x + a)
 
 data KBucket = KBucket
-  { bEntries          :: !(KSeq (NodeLocalInfo, Maybe NodeLocalInfo))
+  { bEntries          :: !(KSeq (Z.Pair NodeLocalInfo (Z.Maybe NodeLocalInfo)))
   -- ^ Entries in the KBucket, along with any newly discovered node that might
   -- replace it according to the protocol.
   , bMostRecentLookup :: !SC.Tick
@@ -227,7 +225,7 @@ newKBucket now refresh =
 
 kBucketEntriesByDistance :: NodeId -> KBucket -> KSeq (NodeInfo NodeAddr)
 kBucketEntriesByDistance refNode KBucket {..} = S.bSortBy cmp
-  $ fmap (fmap snd . getNodeInfo . fst) bEntries
+  $ fmap (fmap Z.snd . getNodeInfo . Z.fst) bEntries
   where cmp = compare `on` distance refNode . niNodeId
 
 data StoreEntry = StoreEntry
@@ -276,7 +274,7 @@ data State drg = State
   -- TODO(rate): figure out the actual rate limit
   , kSentReq   :: !(BoundedMap NodeId OReqProcess)
   -- | OReqProcess by ReqId, needed since replies only contain a reqId
-  , kSentReqId :: !(M.Map ReqId (NodeId, RequestBody))
+  , kSentReqId :: !(M.Map ReqId (Z.Pair NodeId RequestBody))
   -- | Requests we've received (from other nodes) and have sent replies for.
   , kRecvReq   :: !(BoundedMap NodeId IReqProcess)
 
@@ -334,7 +332,8 @@ newState self addrs seed params = State
   , kParams    = params
   , kSchedule  = sched
   , kSelfCheck = selfCheck
-  , kOwnInfo = NodeLocalInfo (NodeInfo self ((Right 0, ) <$> S.bFromList addrs))
+  , kOwnInfo   = NodeLocalInfo
+                   (NodeInfo self ((Z.Right 0 Z.:!:) <$> S.bFromList addrs))
   , kBuckets   = newKBucket (SC.tickNow sched) <$> refreshes
   , kStore     = mempty
   , kSentReq   = BM.newBMap2 (fromIntegral parMaxReqNodes)
@@ -441,7 +440,7 @@ kGetNodeInfo nodeId s0 = case kBucketGetIndex nodeId s0 of
   Just distancePrefix ->
     let KBucket {..} = kBuckets ^?! ix distancePrefix
         nodeMatch    = (==) nodeId . niNodeId . getNodeInfo
-    in  fmap fst . fst $ S.bStatePL (nodeMatch . fst) id dupe bEntries
+    in  fmap Z.fst . fst $ S.bStatePL (nodeMatch . Z.fst) id dupe bEntries
   where State {..} = s0
 
 -- | Return the k closest nodes we know about, from a given key.

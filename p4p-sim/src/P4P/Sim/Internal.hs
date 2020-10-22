@@ -18,7 +18,7 @@ import qualified Data.Map.Strict                  as M
 import qualified Data.Sequence                    as SQ
 import qualified Data.Set                         as S
 
-import           Control.Lens                     (Iso', anon, at, contains,
+import           Control.Lens                     (Iso', anon, contains,
                                                    itraversed, use, (%%=),
                                                    (%%@=), (%=), (.=), _1, _2)
 import           Control.Lens.Mutable
@@ -26,6 +26,7 @@ import           Control.Lens.Mutable.Extra       (FakeAlloc1 (..),
                                                    newFakeAlloc1)
 import           Control.Monad                    (void, when)
 import           Control.Monad.Compat.Extra       ()
+import           Control.Monad.Extra              (whileJustM)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.Extra        (UnMonadTrans, lift2)
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT,
@@ -39,7 +40,7 @@ import           Data.Foldable                    (for_, toList)
 import           Data.Functor.Const               (Const (..))
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
-import           Data.Schedule                    (Tick, TickDelta, whileJustM)
+import           Data.Schedule                    (Tick, TickDelta)
 import           Data.Traversable                 (for)
 import           P4P.Proc                         (GMsg (..), ProcAddr,
                                                    ProcEnv (..), ProcMsgI,
@@ -56,6 +57,15 @@ import           P4P.Sim.Types
 -- convenience wrapper around 'anon', see its documentation for details
 nom :: (Monoid (f a), Foldable f) => Iso' (Maybe (f a)) (f a)
 nom = anon mempty null
+
+at
+  :: (Functor f, Ord k)
+  => k
+  -> (Maybe a -> f (Maybe a))
+  -> M.Map k a
+  -> f (M.Map k a)
+at k f = M.alterF f k
+{-# INLINE at #-}
 
 int :: (Integral a, Num b) => a -> b
 int = fromIntegral
