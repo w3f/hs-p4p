@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies      #-}
@@ -5,10 +6,12 @@
 module P4P.Sim.EchoProcess where
 
 -- external
-import           Data.Word    (Word16)
-import           GHC.Generics (Generic)
-import           P4P.Proc     (GMsg (..), Proc (..), ProtoMsg (..),
-                               Protocol (..))
+import           Codec.Serialise (Serialise (..))
+import           Data.Binary     (Binary (..))
+import           Data.Word       (Word16)
+import           GHC.Generics    (Generic)
+import           P4P.Proc        (GMsg (..), Proc (..), ProtoMsg (..),
+                                  Protocol (..))
 
 
 type EAddr = Word16
@@ -16,13 +19,13 @@ data EchoMsg = EMsg
   { src :: !EAddr
   , dst :: !EAddr
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 data EchoState = EState
   { addrs :: ![EAddr]
   , count :: !Word16
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 type EchoUserI = String
 type EchoUserO = String

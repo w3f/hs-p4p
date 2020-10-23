@@ -23,6 +23,7 @@ module P4P.Sim
   , suspendAll
   , simulate
   , runSim
+  , convertSimData
   -- * Extensions
   , SimXProtocol(..)
   , runSimX
@@ -30,15 +31,19 @@ module P4P.Sim
   -- * Options
   , SimXOptions(..)
   , SimOptions(..)
-  , parseArgsIO
   , mkParser
+  , parseArgsIO
+  , parseArgsIO'
   , simXOptions
   , simOptions
+  , SimConvOptions(..)
+  , simConvOptions
   , module Options.Applicative
   , showOptions
   , allOptions
   -- * IO and utilities
   , SimLog
+  , SimUserRe
   , SimReRe
   , defaultSimUserIO
   , defaultStdIO

@@ -104,6 +104,7 @@ Library
     P4P.Sim.IO
     P4P.Sim.Numeric
     P4P.Sim.Options
+    P4P.Sim.Serialise
     P4P.Sim.Types
     P4P.Sim.Util
     P4P.Sim.Util.IO
@@ -123,15 +124,3 @@ Test-Suite unit
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs
-
-Executable sim
-  Import: generic, executable
-  Build-Depends:
-      p4p-sim
-    , p4p-proc
-    , p4p-protocol-dht-kad
-    , p4p-common
-    , dependent-sum
-    , op
-  HS-Source-Dirs: app
-  Main-Is: Sim.hs

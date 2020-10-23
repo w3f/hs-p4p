@@ -429,12 +429,52 @@ parseArgsIO :: ParserInfo opt -> [String] -> IO opt
 parseArgsIO parser args =
   execParserPure defaultPrefs parser args |> handleParseResult
 
-simParseOptions :: Parser xo -> [String] -> IO (SimXOptions xo)
-simParseOptions xopts = parseArgsIO $ mkParser
-  "sim - a simulator for p4p protocols"
-  (  "Simulate a p4p protocol. Commands are given on stdin and replies "
-  <> "are given on stdout. The syntax is $pid :~ $command where $pid "
-  <> "and $command are Haskell Show/Read instance expressions, e.g. 0 :~ "
-  <> "\"Hello, world!\". Give -v for more detailed output."
-  )
-  (simXOptions xopts)
+parseArgsIO' :: String -> String -> Parser opt -> [String] -> IO opt
+parseArgsIO' title desc parseOpt = parseArgsIO $ mkParser title desc parseOpt
+
+data SimConvOptions xo = SimConvOptions
+  { simConvIFile :: !(Either CInt FilePath)
+  , simConvOFile :: !(Either CInt FilePath)
+  , simConvXOpts :: !xo
+  }
+  deriving (Eq, Show, Read, Generic)
+makeLenses_ ''SimConvOptions
+
+simConvOptions :: Parser xo -> Parser (SimConvOptions xo)
+simConvOptions xopts =
+  SimConvOptions
+    <$> (   (   Left
+            <$< option auto
+            <|  long "input-fd"
+            <>  metavar "FD"
+            <>  help "Read input from a file descriptor."
+            <>  value 0
+            <>  showDefault
+            )
+        <|> (   Right
+            <$< strOption
+            <|  long "input-file"
+            <>  short 'i'
+            <>  metavar "FILE"
+            <>  help "Read input from a file."
+            <>  action "file"
+            )
+        )
+    <*> (   (   Left
+            <$< option auto
+            <|  long "output-fd"
+            <>  metavar "FD"
+            <>  help "Write output to a file descriptor."
+            <>  value 1
+            <>  showDefault
+            )
+        <|> (   Right
+            <$< strOption
+            <|  long "output-file"
+            <>  short 'o'
+            <>  metavar "FILE"
+            <>  help "Write output to a file."
+            <>  action "file"
+            )
+        )
+    <*> xopts

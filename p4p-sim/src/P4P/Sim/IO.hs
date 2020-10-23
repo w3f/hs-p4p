@@ -2,6 +2,7 @@
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -15,20 +16,20 @@ import qualified Data.ByteString.Lazy.Char8     as LBS
 import qualified Data.Map.Strict                as M
 import qualified Data.Set                       as S
 
-import           Codec.Serialise                (Serialise (..),
-                                                 deserialiseOrFail, serialise)
+import           Codec.Serialise                (Serialise (..), serialise)
 import           Control.Clock                  (Clocked (..))
-import           Control.Monad                  (forever, join, void, when)
+import           Control.Monad                  (forever, join, unless, void,
+                                                 when)
 import           Control.Monad.Extra            (untilJustM, whenJust)
 import           Control.Op
 import           Data.Either                    (fromRight, lefts)
 import           Data.Foldable                  (for_, toList, traverse_)
+import           Data.Kind                      (Constraint, Type)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
 import           Data.Maybe                     (mapMaybe)
 import           Data.Schedule                  (Tick)
 import           Data.Traversable               (for)
-import           GHC.Stack                      (HasCallStack)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
                                                  ProcEnv (..), Process (..),
                                                  Protocol (..), RuntimeI (..),
@@ -36,8 +37,6 @@ import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
 import           Text.Read                      (readEither)
 
 -- external, IO
-import qualified Codec.CBOR.Read                as CBOR.Read
-
 import           Control.Clock.IO               (Intv (..), clockWithIO,
                                                  interval, newClock)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
@@ -50,13 +49,10 @@ import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
                                                  readTVarIO)
 import           Crypto.Random.Entropy          (getEntropy)
 import           Crypto.Random.Extra            (ScrubbedBytes)
-import           Data.Primitive.MutVar          (MutVar (..), newMutVar,
-                                                 readMutVar, writeMutVar)
 import           Data.Time                      (defaultTimeLocale, formatTime,
                                                  getZonedTime)
 import           Foreign.C.Types                (CInt)
 import           GHC.IO.Handle.FD               (fdToHandle)
-import           P4P.Proc.Instances             (PrimMonad (..))
 import           System.Directory               (doesPathExist)
 import           System.Exit                    (ExitCode (..))
 import           System.IO                      (BufferMode (..), Handle,
@@ -72,13 +68,15 @@ import           UnliftIO.Exception             (bracket, mask, throwIO)
 -- internal
 import           P4P.Sim.Extension
 import           P4P.Sim.Internal
-import           P4P.Sim.Options                (SimIAction (..),
+import           P4P.Sim.Options                (SimConvOptions (..),
+                                                 SimIAction (..),
                                                  SimIOAction (..),
                                                  SimLogging (..),
                                                  SimOAction (..),
                                                  SimOptions (..),
                                                  isInteractiveMode,
                                                  systemEmptyFile)
+import           P4P.Sim.Serialise
 import           P4P.Sim.Types
 
 
@@ -87,16 +85,16 @@ hGetLineOrEOF h = catchIOError
   (Just <$> hGetLine h)
   (\e -> if isEOFError e then pure Nothing else ioError e)
 
-mkHandle :: Either CInt FilePath -> IO Handle
-mkHandle fdOrFile = do
+mkHandle :: IOMode -> Either CInt FilePath -> IO Handle
+mkHandle mode fdOrFile = do
   h <- case fdOrFile of
-    Right path -> openBinaryFile path AppendMode
+    Right path -> openBinaryFile path mode
     Left  fd   -> fdToHandle fd
   hSetBuffering h LineBuffering
   pure h
 
-annotateRethrow :: IO a -> (IOError -> IOError) -> IO a
-annotateRethrow act f = catchIOError act $ throwIO . f
+rethrow :: (IOError -> IOError) -> IO a -> IO a
+rethrow f act = catchIOError act $ throwIO . f
 
 type DeferredIO a = Either String (IO a)
 
@@ -161,41 +159,16 @@ type SimUserRe ps xs
     )
 
 -- | Convenience type alias for being able to record and replay a simulation.
-type SimReRe ps xs
-  = ( Serialise ps
-    , Serialise (UserI ps)
-    , Serialise (UserO ps)
-    , Serialise (PAddr ps)
-    , Serialise (PMsg ps)
-    , Serialise xs
-    , Serialise (XUserI xs)
-    , Serialise (XUserO xs)
+type SimReRe (codec :: Type -> Constraint) ps xs
+  = ( codec ps
+    , codec (UserI ps)
+    , codec (UserO ps)
+    , codec (PAddr ps)
+    , codec (PMsg ps)
+    , codec xs
+    , codec (XUserI xs)
+    , codec (XUserO xs)
     )
-
-newtype Stream = Stream (MutVar (PrimState IO) LBS.ByteString)
-
-newLBStream :: Handle -> IO Stream
-newLBStream h = do
-  bs <- LBS.hGetContents h
-  mv <- newMutVar bs
-  pure $ Stream mv
-
-deserialiseOrEOF :: Serialise a => String -> Stream -> IO (Maybe a)
-deserialiseOrEOF n (Stream mv) = do
-  bs0 <- readMutVar mv
-  if LBS.null bs0
-    then pure Nothing
-    else do
-      let (unused, v) = case CBOR.Read.deserialiseFromBytes decode bs0 of
-            Left  err -> error $ n <> ": " <> show err
-            Right a   -> a
-      writeMutVar mv unused
-      pure $ Just v
-
-deserialiseNote :: (HasCallStack, Serialise a) => String -> LBS.ByteString -> a
-deserialiseNote n bs = case deserialiseOrFail bs of
-  Left  err -> error $ n <> ": " <> show err
-  Right a   -> a
 
 type SimUserIO ps xs
   = (IO (Maybe (SimXUserI ps xs)), [SimXUserO ps xs] -> IO ())
@@ -342,7 +315,7 @@ defaultRT
   :: forall ps xs
    . SimLog ps xs
   => SimUserRe ps xs
-  => SimReRe ps xs
+  => SimReRe Serialise ps xs
   => SimOptions
   -> Tick
   -> SimUserIO ps xs
@@ -362,7 +335,8 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
   simLog <- case simLogging of
     LogNone -> pure (\_ _ -> pure ())
     _ ->
-      mkHandle simLogOutput >$> defaultSimLog @ps @xs logFilter simLogTimeFmt
+      mkHandle AppendMode simLogOutput
+        >$> defaultSimLog @ps @xs logFilter simLogTimeFmt
 
   (simI, simIClose) <- case simIActRead simIMsg of
     Nothing -> do
@@ -426,7 +400,7 @@ grunSimIO
   :: forall p xs
    . SimLog (State p) xs
   => SimUserRe (State p) xs
-  => SimReRe (State p) xs
+  => SimReRe Serialise (State p) xs
   => (  ProcEnv (SimFullState (State p) xs) IO
      -> SimFullState (State p) xs
      -> IO (SimFullState (State p) xs)
@@ -449,9 +423,9 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
                             (newSimState seed simInitLatency initPids)
                             initXState
       Just h -> do
-        r <- annotateRethrow (LBS.hGetContents h) $ \e -> do
-          annotateIOError e "simIState" Nothing Nothing
-        pure (deserialiseNote "simIState read failed" r)
+        rethrow (\e -> annotateIOError e "simIState" Nothing Nothing) $ do
+          r <- LBS.hGetContents h
+          pure $ deserialiseNote "simIState read failed" r
     whenJust (simIActWrite simIState) $ flip LBS.hPut (serialise ifs)
     LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
 
@@ -500,10 +474,10 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
       let os = serialise ofs
       whenJust (simOActWrite simOState) $ flip LBS.hPut os
       whenJust (simOActCompare simOState) $ \h -> do
-        os' <- annotateRethrow (LBS.hGetContents h)
-          $ \e -> annotateIOError e "simOState" Nothing Nothing
-        when (os /= os') $ simError $ do
-          SimFailedReplayCompare "simOState" t os' os
+        rethrow (\e -> annotateIOError e "simOState" Nothing Nothing) $ do
+          os' <- LBS.hGetContents h
+          when (os /= os') $ do
+            simError $ SimFailedReplayCompare "simOState" t os' os
 
       simStatus
   where SimOptions {..} = opt
@@ -514,7 +488,7 @@ runSimIO
   => Ctx p IO
   => SimLog (State p) ()
   => SimUserRe (State p) ()
-  => SimReRe (State p) ()
+  => SimReRe Serialise (State p) ()
   => SimOptions
   -> (Pid -> IO (State p))
   -> SimUserIO (State p) ()
@@ -548,3 +522,48 @@ newSimAsync maybeEat runSimIO' = do
       pure (cancel aMain >> cancel aRead)
   let simWaitFinish = wait aMain
   pure $ UserSimAsync { .. }
+
+convertSimData
+  :: forall ps xs xo
+   . Ord (PAddr ps)
+  => SimReRe Serialise ps xs
+  => SimReRe Show ps xs
+  => SimReRe Read ps xs => SimConvOptions xo -> IO ()
+convertSimData opt = do
+  hi  <- mkHandle ReadMode simConvIFile
+  ho  <- mkHandle WriteMode simConvOFile
+  bs0 <- LBS.hGetContents hi
+  unless (LBS.null bs0) $ do
+    case someDecodeStream bs0 (allCodecs @(SimXI ps xs)) of
+      Right ((k, v), res) -> writeAll ho k v res
+      Left erri -> case someDecodeStream bs0 (allCodecs @(SimXO' ps xs)) of
+        Right ((k, v), res) -> writeAll ho k v res
+        Left erro ->
+          case someDecodeStream bs0 (allCodecs @(SimFullState ps xs)) of
+            Right ((k, v), res) -> writeAll ho k v res
+            Left  errs          -> do
+              let errors =
+                    fmap ("imsg  (SimXI)       : " <>) erri
+                      <> fmap ("omsg  (SimXO)       : " <>) erro
+                      <> fmap ("state (SimFullState): " <>) errs
+              hPutStrLn stderr
+                $  "convertSimData: could not detect format, "
+                <> "perhaps try a different protocol and/or extension:\n"
+                <> intercalate "\n" errors
+ where
+  SimConvOptions {..} = opt
+
+  writeAll
+    :: (Serialise a, Show a)
+    => Handle
+    -> CodecFormat
+    -> a
+    -> SomeResidue a
+    -> IO ()
+  writeAll ho k v res = do
+    let (enc, i, o) = case k of
+          CodecCbor -> (LBS.pack . showLn, CodecCbor, CodecRead)
+          CodecRead -> (serialise, CodecRead, CodecCbor)
+    hPutStrLn stderr $ "input  format: " <> show i
+    hPutStrLn stderr $ "output format: " <> show o
+    withDecodeStream "convertSimData decode" (LBS.hPut ho . enc) v res

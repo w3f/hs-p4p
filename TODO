@@ -25,7 +25,7 @@ Technical debt
 ==============
 
 - update crypto interface
-- tools for converting Serialise to easier format, & for diffing
+- tools to pretty-print data formats, for diffing
 
 
 Low-level features

@@ -154,7 +154,6 @@ type SimUserO ps = SimXUserO ps ()
 data SimAuxO' ao i o a =
     SimUserAuxO !Pid !ao
   | SimProcEvent !(SimProcEvt' i o a)
-  -- :^ TODO: filter out User messages, these are already represented elsewhere
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 type SimAuxO ps = SimAuxO' (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
 
@@ -212,3 +211,4 @@ type SimXI ps xs = GMsg (RuntimeI ()) (SimXUserI ps xs) Void Void
 -- | Output from the sim.
 type SimO ps = GMsg (RuntimeO Void) (SimUserO ps) Void (SimAuxO ps)
 type SimXO ps xs = GMsg (RuntimeO Void) (SimXUserO ps xs) Void (SimAuxO ps)
+type SimXO' ps xs = GMsg (RuntimeO Void) (SimXUserO ps xs) Void Void

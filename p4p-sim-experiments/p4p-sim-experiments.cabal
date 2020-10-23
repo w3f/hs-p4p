@@ -63,19 +63,58 @@ Common executable
       -rtsopts
 -- end common stanzas
 
-Executable sim-kad
-  Import: generic, executable
+Library
+  Import: generic
   Build-Depends:
       p4p-sim
     , p4p-proc
     , p4p-protocol-dht-kad
     , p4p-common
+    , op
     , binary
     , bytestring
     , containers
     , lens
-    , op
     , serialise
     , transformers
+  HS-Source-Dirs: src
+  Exposed-Modules:
+    P4P.Sim.Experiments.Protocol
+    P4P.Sim.Experiments.Extension
+    P4P.Sim.Experiments.Extension.Kademlia
+
+Executable sim
+  Import: generic, executable
+  Build-Depends:
+      p4p-sim-experiments
+    , p4p-sim
+    , p4p-proc
+    , p4p-protocol-dht-kad
+    , op
+    , bytestring
+    , dependent-sum
+    , serialise
+  HS-Source-Dirs: app
+  Main-Is: Sim.hs
+
+Executable sim-conv
+  Import: generic, executable
+  Build-Depends:
+      p4p-sim-experiments
+    , p4p-sim
+    , p4p-proc
+    , serialise
+  HS-Source-Dirs: app
+  Main-Is: SimConv.hs
+
+Executable sim-kad
+  Import: generic, executable
+  Build-Depends:
+      p4p-sim-experiments
+    , p4p-sim
+    , p4p-protocol-dht-kad
+    , p4p-common
+    , op
+    , lens
   HS-Source-Dirs: app
   Main-Is: SimKad.hs
