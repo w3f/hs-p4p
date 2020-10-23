@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass        #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -22,6 +23,7 @@ import qualified Data.Sequence.Extra               as S
 import qualified Data.Strict                       as Z
 import qualified Data.Vector                       as V
 
+import           Codec.Serialise                   (Serialise)
 import           Control.Applicative               (liftA2)
 import           Control.Lens                      (itraversed, traversed,
                                                     (%%@~), (%%~), (%~), (^?!),
@@ -36,6 +38,7 @@ import           Control.Monad.Trans.Except        (ExceptT, throwE)
 import           Control.Monad.Trans.Except.Extra  (ErrMsg, checkConsistent,
                                                     checkConstrName)
 import           Control.Monad.Trans.State.Strict  (StateT (..), state)
+import           Data.Binary                       (Binary)
 import           Data.Bits                         (complement,
                                                     countLeadingZeros, shiftL,
                                                     xor, (.&.), (.|.))
@@ -44,6 +47,7 @@ import           Data.Function                     (on, (&))
 import           Data.Functor.Identity             (runIdentity)
 import           Data.Traversable                  (for)
 import           Data.Tuple.Extra                  (dupe)
+import           Data.Vector.Binary                ()
 import           Data.Word                         (Word16, Word8)
 --import           Debug.Pretty.Simple               (pTraceShowId)
 import           GHC.Generics                      (Generic)
@@ -113,7 +117,7 @@ data KParams = KParams
   , parIntvSelfCheck :: !SC.TickDelta
   -- ^ Self-consistency time.
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 parKeyBits :: KParams -> Int
 parKeyBits KParams {..} = fromIntegral parKeyBytes * 8
@@ -155,6 +159,8 @@ newtype NodeLocalInfo = NodeLocalInfo {
   -- sent by this node at local timestamp t. Reply timestamps are preferred
   -- over non-reply timestamps since they cannot be forged.
   } deriving (Show, Read, Generic, Eq)
+instance Binary NodeLocalInfo
+instance Serialise NodeLocalInfo
 makeLenses_ ''NodeLocalInfo
 makeWrapped ''NodeLocalInfo
 
@@ -216,7 +222,7 @@ data KBucket = KBucket
   -- a bucket in whose range it has not performed a node lookup within an hour."
   , bRefresh          :: !(SC.Task KTask) -- RefreshBucket
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''KBucket
 
 newKBucket :: SC.Tick -> SC.Task KTask -> KBucket
@@ -236,7 +242,7 @@ data StoreEntry = StoreEntry
   , sRepub  :: !(SC.Task KTask) -- RepublishKey
   , sExpire :: !(SC.Task KTask) -- ExpireValue
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 
 type BoundedMap k v = BM.BMap2 k RequestBody v
 
@@ -283,7 +289,7 @@ data State drg = State
   -- TODO(rate): bounded Map, except for "system" commands
   , kRecvCmd   :: !(BM.BMap CmdId ICmdProcess)
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''State
 
 checkState :: Monad m => State drg -> ExceptT ErrMsg m ()

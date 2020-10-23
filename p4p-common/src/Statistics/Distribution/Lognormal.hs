@@ -3,7 +3,8 @@
 
 -- https://github.com/bos/statistics/pull/165
 module Statistics.Distribution.Lognormal
-  ( LognormalDistribution
+  ( N.NormalDistribution
+  , LognormalDistribution
     -- * Constructors
   , lognormalDistr
   , lognormalDistrErr

@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE LambdaCase        #-}
@@ -8,6 +9,8 @@ module Data.Map.Bounded where
 
 import qualified Data.Map.Strict as M
 
+import           Codec.Serialise (Serialise)
+import           Data.Binary     (Binary)
 import           Data.Functor    ((<&>))
 import           GHC.Generics    (Generic)
 import           GHC.Stack       (HasCallStack)
@@ -66,7 +69,7 @@ data BMap k v = BMap
   { bMap     :: !(M.Map k v)
   , bMaxSize :: !Int
   }
-  deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise, Functor, Foldable, Traversable)
 
 newBMap :: Ord k => Int -> BMap k v
 newBMap = BMap mempty
@@ -106,7 +109,7 @@ data BMap2 k1 k2 v = BMap2
   , b2MaxSize2 :: !Int
   -- ^ max number of k2 entries per k1
   }
-  deriving (Eq, Ord, Show, Read, Generic, Functor, Foldable, Traversable)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise, Functor, Foldable, Traversable)
 
 newBMap2 :: (Ord k1) => Int -> Int -> BMap2 k1 k2 v
 newBMap2 = BMap2 mempty

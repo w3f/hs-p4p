@@ -70,10 +70,12 @@ Executable sim-kad
     , p4p-proc
     , p4p-protocol-dht-kad
     , p4p-common
+    , binary
     , bytestring
     , containers
     , lens
     , op
+    , serialise
     , transformers
   HS-Source-Dirs: app
   Main-Is: SimKad.hs

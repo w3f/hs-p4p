@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass  #-}
 {-# LANGUAGE DeriveGeneric   #-}
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RankNTypes      #-}
@@ -19,12 +20,14 @@ import qualified Data.Map.Strict                   as M
 import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
 
+import           Codec.Serialise                   (Serialise)
 import           Control.Lens                      (Lens', use, (%%=), (%=),
                                                     (.=))
 import           Control.Lens.Extra                (at_, (%%=!))
 import           Control.Lens.Strict               (at, sans)
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad.Trans.State.Strict  (runState, state)
+import           Data.Binary                       (Binary)
 import           Data.Map.Bounded                  (ValueAt (..))
 import           GHC.Generics                      (Generic)
 import           GHC.Stack                         (HasCallStack)
@@ -64,7 +67,7 @@ data IReqProcess = IReqProcess
   , ireqReply   :: !ReplyBody
   -- ^ The result of the request, to be sent (and re-sent) to the requestor.
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''IReqProcess
 
 ireqIndex :: HasCallStack => Msg -> ((NodeId, RequestBody), ReqId)
@@ -131,7 +134,7 @@ data RetryState = RetryState
   , retryTask  :: !(SC.Task KTask)
   -- ^ Task for timing out a single try (resend).
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 
 {- | An ongoing process to handle replies to requests we make to another node.
 
@@ -159,7 +162,7 @@ data OReqProcess = OReqProcess
   -- times out naturally.
   , oreqRetry   :: !RetryState
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''OReqProcess
 
 oreqInitTick :: OReqProcess -> SC.Tick

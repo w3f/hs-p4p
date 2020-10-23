@@ -68,15 +68,18 @@ Library
   Build-Depends:
       p4p-common
     , p4p-proc
+    , binary
     , bytestring
     , containers
     , extra
     , lens
     , safe
     , schedule
+    , serialise
     , strict
     , transformers
     , vector
+    , vector-binary-instances
 --    , pretty-simple
   HS-Source-Dirs: src
   Exposed-Modules:

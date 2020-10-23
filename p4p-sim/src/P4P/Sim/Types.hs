@@ -1,5 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
 {-# LANGUAGE DefaultSignatures     #-}
+{-# LANGUAGE DeriveAnyClass        #-}
 {-# LANGUAGE DeriveFunctor         #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE EmptyDataDeriving     #-}
@@ -13,13 +14,16 @@
 module P4P.Sim.Types where
 
 -- external
+import qualified Data.ByteString.Lazy  as LBS
 import qualified Data.Map.Strict       as M
 import qualified Data.Sequence         as SQ
 
+import           Codec.Serialise       (Serialise)
 import           Control.Lens.TH       (makePrisms)
 import           Control.Lens.TH.Extra (makeLenses_)
 import           Crypto.Random.Extra   (ByteArrayAccess, ChaChaDRGInsecure,
                                         initialize)
+import           Data.Binary           (Binary)
 import           Data.Map.Strict       (Map)
 import           Data.Schedule         (Tick)
 import           Data.Set              (Set)
@@ -44,7 +48,7 @@ type Pid = Word16
 -- | Latency profile.
 data SimLatency = SLatAddrIndep !KnownDistPos
     -- ^ Latency is independent of the addresses.
-  deriving (Eq, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic, Binary, Serialise)
 
 -- | State of the simulation. Process state is stored separately.
 data SimState' i a = SimState
@@ -54,7 +58,7 @@ data SimState' i a = SimState
   , simAddr    :: !(Map a (Set Pid))
   , simIn      :: !(Map Pid (Map Tick (SQ.Seq i)))
   }
-  deriving (Eq, Show, Read, Generic)
+  deriving (Eq, Show, Read, Generic, Binary, Serialise)
 makeLenses_ ''SimState'
 type SimState ps = SimState' (GMsgI ps) (PAddr ps)
 
@@ -86,6 +90,8 @@ deriving instance (Show (Map Pid ps), Show (SimState ps), Show xs)
   => Show (SimFullState ps xs)
 deriving instance (Read (Map Pid ps), Read (SimState ps), Read xs)
   => Read (SimFullState ps xs)
+instance (Binary (Map Pid ps), Binary (SimState ps), Binary xs) => Binary (SimFullState ps xs)
+instance (Serialise (Map Pid ps), Serialise (SimState ps), Serialise xs) => Serialise (SimFullState ps xs)
 
 data SimProcEvt' i o a =
   -- | A process received a message.
@@ -96,7 +102,7 @@ data SimProcEvt' i o a =
   | SimNoSuchPid !(Either () Pid) !Pid
   -- | A process tried to send to an address with no listeners.
   | SimNoSuchAddr !Pid !a
- deriving (Eq, Ord, Show, Read, Generic)
+ deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 makePrisms ''SimProcEvt'
 type SimProcEvt ps = SimProcEvt' (GMsgI ps) (GMsgO ps) (PAddr ps)
 
@@ -109,7 +115,7 @@ data SimProcState ps i a = SimProcState
   , spInbox :: !(Map Tick (SQ.Seq i))
   , spState :: !ps
   }
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 -- | User input into the sim. TODO: will be extended with debugging commands.
 data SimUserI' ps ui i a xi =
@@ -123,7 +129,7 @@ data SimUserI' ps ui i a xi =
   | SimProcDel !Pid
   | SimExtensionI !xi
     -- ^ extension input type
- deriving (Eq, Ord, Show, Read, Generic, Functor)
+ deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise, Functor)
 type SimXUserI ps xs
   = SimUserI' ps (UserI ps) (GMsgI ps) (PAddr ps) (XUserI xs)
 type SimUserI ps = SimXUserI ps ()
@@ -140,7 +146,7 @@ data SimUserO' ps uo i a xo =
   | SimProcDelResult !Pid !(Maybe (SimProcState ps i a))
   | SimExtensionO !xo
     -- ^ extension output type
- deriving (Eq, Show, Read, Generic, Functor)
+ deriving (Eq, Show, Read, Generic, Binary, Serialise, Functor)
 type SimXUserO ps xs
   = SimUserO' ps (UserO ps) (GMsgI ps) (PAddr ps) (XUserO xs)
 type SimUserO ps = SimXUserO ps ()
@@ -149,17 +155,17 @@ data SimAuxO' ao i o a =
     SimUserAuxO !Pid !ao
   | SimProcEvent !(SimProcEvt' i o a)
   -- :^ TODO: filter out User messages, these are already represented elsewhere
- deriving (Eq, Ord, Show, Read, Generic)
+ deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 type SimAuxO ps = SimAuxO' (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
 
 data SimError = SimFailedReplayCompare
   { simFailedReplayCompareType     :: !String
   , simFailedReplayCompareTick     :: !Tick
-  , simFailedReplayCompareExpected :: !String
-  , simFailedReplayCompareActual   :: !String
+  , simFailedReplayCompareExpected :: !LBS.ByteString
+  , simFailedReplayCompareActual   :: !LBS.ByteString
   }
     -- ^ Failed to compare replay at the given tick.
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 class (
   PMsg xs ~ Void,

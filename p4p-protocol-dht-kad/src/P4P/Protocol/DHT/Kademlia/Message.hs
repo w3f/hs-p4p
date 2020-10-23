@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass  #-}
 {-# LANGUAGE DeriveFunctor   #-}
 {-# LANGUAGE DeriveGeneric   #-}
 {-# LANGUAGE LambdaCase      #-}
@@ -15,7 +16,9 @@ import qualified Data.Map.Strict        as M
 import qualified Data.Sequence.Extra    as S
 import qualified P4P.Proc               as P
 
+import           Codec.Serialise        (Serialise)
 import           Control.Lens.TH.Extra  (makeLenses_)
+import           Data.Binary            (Binary)
 import           GHC.Generics           (Generic)
 import           GHC.Stack              (HasCallStack)
 
@@ -34,7 +37,7 @@ data NodeInfo a = NodeInfo
   { niNodeId   :: !NodeId
   , niNodeAddr :: !(KSeq a)
   }
-  deriving (Show, Read, Generic, Eq, Ord, Functor)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord, Functor)
 makeLenses_ ''NodeInfo
 
 type NodeInfos = KSeq (NodeInfo NodeAddr)
@@ -49,23 +52,23 @@ data KTask =
   | TOIReq !NodeId !RequestBody
   | TOICmdOReq !CmdId !NodeId !RequestBody
   | TOICmd !CmdId
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data RequestRejected = TryAgainLater !SC.TickDelta
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data RequestBody =
     Ping
   | GetNode !NodeId
   | GetValue !Key
   | PutValue !Key !Value
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data Request = Request
   { reqId   :: !ReqId
   , reqBody :: !RequestBody
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 -- | Width of a 'ReqId' and 'CmdId', in bytes.
 --
@@ -79,7 +82,7 @@ data ReplyBody =
   | GetNodeReply !NodeInfos
   | GetValueReply !(Either NodeInfos Value)
   | PutValueReply !SC.TickDelta
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data Reply = Reply
   { repReqId      :: !ReqId
@@ -90,7 +93,7 @@ data Reply = Reply
   -- obtain additional assurance of the sender's network address.
   , repBody       :: !(Either RequestRejected ReplyBody)
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 type MsgBody = Either Request Reply
 
@@ -105,7 +108,7 @@ data Msg = Msg
   , sent    :: !SC.Tick
   , body    :: !MsgBody
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 -- | Given an incoming reply, if it is also an implicit ping this function will
 -- generate the "virtual request" that represents that ping.
@@ -145,7 +148,7 @@ data Command = Command
   { cmdId   :: !CmdId
   , cmdBody :: !CommandBody
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data CommandBody =
     GetNodeId
@@ -154,13 +157,13 @@ data CommandBody =
   | LookupNode !NodeId
   | LookupValue  !Key
   | InsertValue !Key !Value
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data CommandReply = CommandReply
   { cmdRepId   :: !CmdId
   , cmdRepBody :: !(Either RequestRejected CommandReplyBody)
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data CommandReplyBody =
     CommandTimedOut !SC.TickDelta
@@ -170,7 +173,7 @@ data CommandReplyBody =
   | LookupNodeReply !NodeInfos
   | LookupValueReply !(Either NodeInfos Value)
   | InsertValueReply !(M.Map NodeId (Maybe SC.TickDelta))
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 
 {- | * Logging message types, mostly for internal usage. -}
@@ -183,7 +186,7 @@ data ICmdState lookup insert =
   | ICInserting !Value !insert
     -- ^ The command is performing an insert operation on some value.
   | ICFinished
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 icmdStateSummary :: ICmdState lookup insert -> ICmdState () ()
 icmdStateSummary = \case
@@ -197,7 +200,7 @@ data KProcess =
     KPICmd !CmdId
   | KPIReq !ReqId !RequestBody
   | KPOReq !ReqId !RequestBody
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 -- | Data structure summarising k-bucket operations
 data KBucketOp =
@@ -224,7 +227,7 @@ data KBucketOp =
   | KBucketTotallyFullIgnoring !NodeId
     -- ^ The k-bucket was completely full, even the pending spots, so we're
     -- ignoring this node completely.
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data KLogMsg =
     W_SelfCheckFailed !String
@@ -264,7 +267,7 @@ data KLogMsg =
     -- This suggests a minor programming error.
   -- | D_Msg !String
   -- -- ^ Generic message, for debugging purposes.
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 
 {- | * Top-level message types -}

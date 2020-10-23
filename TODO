@@ -25,7 +25,7 @@ Technical debt
 ==============
 
 - update crypto interface
-- use Serialise instead of Read/Show, helps with diffing later
+- tools for converting Serialise to easier format, & for diffing
 
 
 Low-level features

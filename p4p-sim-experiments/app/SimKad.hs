@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass        #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE LambdaCase            #-}
@@ -15,6 +16,7 @@ import qualified Data.Map.Strict                  as M
 import qualified Data.Sequence.Extra              as Seq
 import qualified Data.Set                         as S
 
+import           Codec.Serialise                  (Serialise)
 import           Control.Lens                     ((%%=), (%%~), (&), (.=))
 import           Control.Lens.TH.Extra            (makeLenses_)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
@@ -24,6 +26,7 @@ import           Control.Monad.Trans.Writer.Extra (tell1)
 import           Control.Op
 import           Crypto.Random.Extra              (initializeFrom,
                                                    randomBytesGenerate)
+import           Data.Binary                      (Binary)
 import           Data.Foldable                    (for_)
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (fromJust)
@@ -62,15 +65,15 @@ data KSimState = KSimState
   { ksDRG     :: !ChaChaDRGInsecure
   , ksJoining :: !(Maybe (Either (Map Pid (Maybe NodeId)) (Map Pid NodeId)))
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''KSimState
 
 data KSimI = KSimJoinAll
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 makeLenses_ ''KSimI
 
 data KSimO = KSimJoinStarted | KSimJoinFinished
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 makeLenses_ ''KSimO
 
 instance Protocol KSimState where

@@ -67,8 +67,10 @@ Library
   Import: generic
   Build-Depends:
       extra
+    , binary
     , lens
     , mutable-lens
+    , serialise
     , singletons
     , template-haskell
     -- Crypto.*

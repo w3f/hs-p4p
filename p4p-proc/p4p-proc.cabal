@@ -67,12 +67,14 @@ Library
   Import: generic
   Build-Depends:
       extra
+    , binary
     , lens
     , mutable-lens (>= 0.3)
     , mtl
     , op
     , primitive
     , schedule
+    , serialise
     -- P4P.Proc.Util
     , smash
     , transformers

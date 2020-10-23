@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass  #-}
 {-# LANGUAGE DeriveGeneric   #-}
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RankNTypes      #-}
@@ -17,11 +18,13 @@ import qualified Data.Map.Bounded                  as BM
 import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
 
+import           Codec.Serialise                   (Serialise)
 import           Control.Lens                      (Lens', itraversed, use,
                                                     (%%=), (%%@~), (&), (<.))
 import           Control.Lens.Extra                (at_, unsafeIx, (%%=!))
 import           Control.Lens.TH.Extra             (makeLenses_)
 import           Control.Monad.Trans.State.Strict  (runState, state)
+import           Data.Binary                       (Binary)
 import           Data.Foldable                     (toList)
 import           Data.Map.Bounded                  (ValueAt (..))
 import           Data.Map.Strict                   (Map)
@@ -47,7 +50,7 @@ data SimpleQuery r = SimpleQuery
   -- ^ Nodes we have made a query to and are waiting on. This should be
   -- precisely the number of 'OReqProcess's in our 'F.SExpect'.
   }
-  deriving (Show, Read, Generic, Eq, Ord)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 newSimpleQuery :: NodeInfos' -> SimpleQuery r
 newSimpleQuery initNodes = SimpleQuery initNodes mempty mempty mempty
@@ -56,7 +59,7 @@ data ICmdReply =
     ICGotNodes !NodeInfos
   | ICGotValue !Value
   | ICPutOK !SC.TickDelta
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 {- | Logical input that the state machine actually runs on.
 
@@ -65,7 +68,7 @@ We convert 'ReplyBody' into this, using 'toCmdInput', before processing it.
 data ICmdInput =
     ICStart
   | ICReply !NodeId !(F.TimedResult () ICmdReply)
-    deriving (Show, Read, Generic, Eq, Ord)
+    deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 toCmdInput
   :: NodeId -> RequestBody -> F.TimedResult () ReplyBody -> Maybe ICmdInput
@@ -106,7 +109,7 @@ data ICmdProcess = ICmdProcess
   -- automated behaviour such as a bucket refresh). This determines whether we
   -- send out a CommandReply when the command finishes.
   }
-  deriving (Show, Read, Generic, Eq)
+  deriving (Show, Read, Generic, Binary, Serialise, Eq)
 makeLenses_ ''ICmdProcess
 
 cmdUserReply :: CmdId -> CommandReplyBody -> KadO

@@ -1,4 +1,5 @@
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE RankNTypes        #-}
@@ -12,9 +13,11 @@
 module P4P.Proc.Internal where
 
 -- external
+import           Codec.Serialise     (Serialise)
 import           Control.Monad       (join, void)
 import           Control.Monad.Extra (whileJustM)
 import           Control.Op
+import           Data.Binary         (Binary)
 import           Data.Kind           (Constraint, Type)
 import           Data.Schedule       (Tick)
 import           Data.Void           (Void)
@@ -48,11 +51,11 @@ instance ProtoMsg Void where
 -- structure for other purposes; the simulation framework instantiates it to
 -- '()'.
 data RuntimeI task = RTTick !Tick !task
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 -- | Output from a process to the runtime execution environment.
 data RuntimeO addr = RTAddr ![addr] ![addr]
-  deriving (Eq, Ord, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 -- | Protocol with its protocol-messages and user-messages.
 class ProtoMsg (PMsg ps) => Protocol ps where
@@ -86,7 +89,7 @@ data GMsg r u p a
   | MsgAux !a
   -- ^ Message from/to auxillary sources, e.g. for logging or debugging
   -- purposes. This is exempted from the deterministic behaviour contract.
- deriving (Eq, Ord, Show, Read, Generic)
+ deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 type GMsgI ps = GMsg (RuntimeI ()) (UserI ps) (PMsg ps) Void
 type GMsgO ps = GMsg (RuntimeO (Addr (PMsg ps))) (UserO ps) (PMsg ps) (AuxO ps)

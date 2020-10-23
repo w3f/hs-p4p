@@ -6,10 +6,12 @@
 -- TODO: just use lens instead of this hacky module
 module Data.Sequence.Extra where
 
+import           Codec.Serialise (Serialise)
+import           Data.Binary     (Binary)
 import           Data.Sequence
-import           GHC.Generics  (Generic)
-import           GHC.Stack     (HasCallStack)
-import           Prelude       hiding (drop, filter, length, take, zipWith)
+import           GHC.Generics    (Generic)
+import           GHC.Stack       (HasCallStack)
+import           Prelude         hiding (drop, filter, length, take, zipWith)
 
 -- | Like @adjust'@ but the function can return something
 state :: (a -> (v, a)) -> Int -> Seq a -> (Maybe v, Seq a)
@@ -41,6 +43,8 @@ insertOr v vs = case findIndexL (v ==) vs of
 -- not actually enforce the bound yet.
 newtype BSeq a = BSeq { unBSeq :: Seq a }
  deriving (Eq, Ord, Show, Read, Generic, Functor, Applicative, Monad, Foldable, Traversable, Semigroup, Monoid)
+instance Binary a => Binary (BSeq a)
+instance Serialise a => Serialise (BSeq a)
 
 newBSeq :: BSeq a
 newBSeq = BSeq empty

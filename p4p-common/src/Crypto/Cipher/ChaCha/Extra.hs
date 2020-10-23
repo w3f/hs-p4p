@@ -10,7 +10,9 @@ module Crypto.Cipher.ChaCha.Extra
   )
 where
 
+import           Codec.Serialise      (Serialise)
 import           Control.DeepSeq      (NFData)
+import           Data.Binary          (Binary)
 import           Data.ByteArray       (ByteArray, ByteArrayAccess)
 import qualified Data.ByteArray       as B
 import qualified Data.ByteString      as BS
@@ -34,6 +36,8 @@ newtype StatePure = StatePure B.ScrubbedBytes
 -- for simulations. It does not zero the memory when freed, hence insecure.
 newtype StatePureInsecure = StatePureInsecure BS.ByteString
     deriving (Eq, Ord, Show, Read, Generic, IsString, Semigroup, Monoid, NFData, ByteArray, ByteArrayAccess)
+instance Binary StatePureInsecure
+instance Serialise StatePureInsecure
 
 -- | Initialize simple ChaCha State
 --

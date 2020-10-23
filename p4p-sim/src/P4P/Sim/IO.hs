@@ -11,9 +11,12 @@
 module P4P.Sim.IO where
 
 -- external, pure
+import qualified Data.ByteString.Lazy.Char8     as LBS
 import qualified Data.Map.Strict                as M
 import qualified Data.Set                       as S
 
+import           Codec.Serialise                (Serialise (..),
+                                                 deserialiseOrFail, serialise)
 import           Control.Clock                  (Clocked (..))
 import           Control.Monad                  (forever, join, void, when)
 import           Control.Monad.Extra            (untilJustM, whenJust)
@@ -22,16 +25,19 @@ import           Data.Either                    (fromRight, lefts)
 import           Data.Foldable                  (for_, toList, traverse_)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
-import           Data.Maybe                     (fromMaybe, mapMaybe)
+import           Data.Maybe                     (mapMaybe)
 import           Data.Schedule                  (Tick)
 import           Data.Traversable               (for)
+import           GHC.Stack                      (HasCallStack)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
                                                  ProcEnv (..), Process (..),
-                                                 Protocol (..), RuntimeI (..))
-import           Safe                           (readNote)
+                                                 Protocol (..), RuntimeI (..),
+                                                 Void)
 import           Text.Read                      (readEither)
 
 -- external, IO
+import qualified Codec.CBOR.Read                as CBOR.Read
+
 import           Control.Clock.IO               (Intv (..), clockWithIO,
                                                  interval, newClock)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
@@ -44,16 +50,20 @@ import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
                                                  readTVarIO)
 import           Crypto.Random.Entropy          (getEntropy)
 import           Crypto.Random.Extra            (ScrubbedBytes)
+import           Data.Primitive.MutVar          (MutVar (..), newMutVar,
+                                                 readMutVar, writeMutVar)
 import           Data.Time                      (defaultTimeLocale, formatTime,
                                                  getZonedTime)
 import           Foreign.C.Types                (CInt)
 import           GHC.IO.Handle.FD               (fdToHandle)
+import           P4P.Proc.Instances             (PrimMonad (..))
 import           System.Directory               (doesPathExist)
 import           System.Exit                    (ExitCode (..))
 import           System.IO                      (BufferMode (..), Handle,
                                                  IOMode (..), hClose, hGetLine,
-                                                 hPutStrLn, hSetBuffering,
-                                                 openFile, stderr, stdin)
+                                                 hIsEOF, hPutStrLn,
+                                                 hSetBuffering, openBinaryFile,
+                                                 stderr, stdin)
 import           System.IO.Error                (annotateIOError, catchIOError,
                                                  isEOFError)
 import           Text.Pretty.Simple             (pHPrint)
@@ -80,7 +90,7 @@ hGetLineOrEOF h = catchIOError
 mkHandle :: Either CInt FilePath -> IO Handle
 mkHandle fdOrFile = do
   h <- case fdOrFile of
-    Right path -> openFile path AppendMode
+    Right path -> openBinaryFile path AppendMode
     Left  fd   -> fdToHandle fd
   hSetBuffering h LineBuffering
   pure h
@@ -98,12 +108,12 @@ runDeferredIO res = case lefts (toList res) of
 
 readIfExist :: String -> FilePath -> IO (DeferredIO Handle)
 readIfExist n p = doesPathExist p >$> \case
-  True  -> Right $ openFile p ReadMode
+  True  -> Right $ openBinaryFile p ReadMode
   False -> Left $ "path " <> n <> ": does not exist for reading: " <> p
 
 writeIfNonexist :: String -> FilePath -> IO (DeferredIO Handle)
 writeIfNonexist n p = doesPathExist p >$> \case
-  False -> Right $ openFile p WriteMode
+  False -> Right $ openBinaryFile p WriteMode
   True  -> Left $ "path " <> n <> ": conflict exists for writing: " <> p
 
 dOpenIAction
@@ -134,27 +144,58 @@ openIOAction a = dOpenIOAction a >>= runDeferredIO
 closeIOAction :: SimIOAction Handle -> IO ()
 closeIOAction = void . traverse hClose
 
--- | Convenience type alias for being able to record and replay a simulation.
--- TODO: use ByteString/Generic-based thing, e.g. Serialise
-type SimReRe ps xs
+-- | Convenience type alias for being able to type in and out a simulation.
+type SimUserRe ps xs
   = ( Show ps
     , Read ps
-    , Show (UserI ps)
     , Read (UserI ps)
     , Show (UserO ps)
-    , Read (UserO ps)
+    , Show (UserI ps) -- as part of UserO we can dump the state, which contains UserI messages
     , Show (PAddr ps)
     , Read (PAddr ps)
+    , Ord (PAddr ps)
     , Show (PMsg ps)
     , Read (PMsg ps)
-    , Ord (PAddr ps)
-    , Show xs
-    , Read xs
-    , Show (XUserI xs)
     , Read (XUserI xs)
     , Show (XUserO xs)
-    , Read (XUserO xs)
     )
+
+-- | Convenience type alias for being able to record and replay a simulation.
+type SimReRe ps xs
+  = ( Serialise ps
+    , Serialise (UserI ps)
+    , Serialise (UserO ps)
+    , Serialise (PAddr ps)
+    , Serialise (PMsg ps)
+    , Serialise xs
+    , Serialise (XUserI xs)
+    , Serialise (XUserO xs)
+    )
+
+newtype Stream = Stream (MutVar (PrimState IO) LBS.ByteString)
+
+newLBStream :: Handle -> IO Stream
+newLBStream h = do
+  bs <- LBS.hGetContents h
+  mv <- newMutVar bs
+  pure $ Stream mv
+
+deserialiseOrEOF :: Serialise a => String -> Stream -> IO (Maybe a)
+deserialiseOrEOF n (Stream mv) = do
+  bs0 <- readMutVar mv
+  if LBS.null bs0
+    then pure Nothing
+    else do
+      let (unused, v) = case CBOR.Read.deserialiseFromBytes decode bs0 of
+            Left  err -> error $ n <> ": " <> show err
+            Right a   -> a
+      writeMutVar mv unused
+      pure $ Just v
+
+deserialiseNote :: (HasCallStack, Serialise a) => String -> LBS.ByteString -> a
+deserialiseNote n bs = case deserialiseOrFail bs of
+  Left  err -> error $ n <> ": " <> show err
+  Right a   -> a
 
 type SimUserIO ps xs
   = (IO (Maybe (SimXUserI ps xs)), [SimXUserO ps xs] -> IO ())
@@ -173,7 +214,7 @@ data UserSimAsync ps xs = UserSimAsync
 defaultStdIO :: StdIO
 defaultStdIO = (hGetLineOrEOF stdin, putStrLn)
 
-defaultSimUserIO :: SimReRe ps xs => StdIO -> SimUserIO ps xs
+defaultSimUserIO :: SimUserRe ps xs => StdIO -> SimUserIO ps xs
 defaultSimUserIO (getInput, doOutput) =
   -- support special "pid :~ msg" syntax for SimProcUserI / SimProcUserO
   let i = untilJustM $ getInput >>= \case
@@ -275,12 +316,18 @@ logAllNoUserTicks = \case
   MsgAux (SimProcEvent (SimMsgRecv _ (MsgRT (RTTick _ _)))) -> False
   _         -> True
 
-compareOMsg :: (SimError -> IO ()) -> Tick -> Maybe String -> Handle -> IO ()
-compareOMsg simError t om h = do
-  om' <- hGetLineOrEOF h
-  when (om /= om') $ simError $ do
-    SimFailedReplayCompare "simOMsg" t (s om') (s om)
-  where s = fromMaybe "<EOF>"
+compareOMsg
+  :: (SimError -> IO ()) -> Tick -> Maybe LBS.ByteString -> Handle -> IO ()
+compareOMsg simError t mom h = case mom of
+  Nothing -> hIsEOF h >>= \case
+    True  -> pure ()
+    False -> err (LBS.pack "<not EOF>") (LBS.pack "<EOF>")
+  Just om -> hIsEOF h >>= \case
+    True  -> err (LBS.pack "<EOF>") om
+    False -> do
+      om' <- LBS.hGet h $ fromIntegral $ LBS.length om
+      when (om /= om') $ err om' om
+  where err x y = simError $ SimFailedReplayCompare "simOMsg" t x y
 
 -- | Execution runtime for the simulation.
 data SimRT ps xs m = SimRT
@@ -293,7 +340,9 @@ data SimRT ps xs m = SimRT
 
 defaultRT
   :: forall ps xs
-   . (SimLog ps xs, SimReRe ps xs)
+   . SimLog ps xs
+  => SimUserRe ps xs
+  => SimReRe ps xs
   => SimOptions
   -> Tick
   -> SimUserIO ps xs
@@ -321,11 +370,12 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       Clocked r f <- clockWithIO simClock simUserI
       pure $ (r >$> c2i, f)
     Just h -> do
-      let input = hGetLineOrEOF h >$> fmap (readNote "simIMsg read")
+      s <- newLBStream h
+      let input = deserialiseOrEOF "simIMsg read" s
       pure $ (input, pure ())
 
   simErrors <- newTVarIO []
-  devnull   <- openFile systemEmptyFile AppendMode
+  devnull   <- openBinaryFile systemEmptyFile AppendMode
 
   let
     simClose = simIClose >> hClose devnull
@@ -337,13 +387,16 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
     simRunI = do
       i <- simI
       whenJust (simIActWrite simIMsg) $ \h -> do
-        whenJust i $ hPutStrLn h . show
-      hPutStrLn devnull $ show i -- force to avoid thunks
+        whenJust i $ LBS.hPut h . serialise
+      LBS.hPut devnull $ serialise i -- force to avoid leaking thunks
       pure i
 
+    ignoreAux :: GMsg r u p a -> Maybe (GMsg r u p Void)
     ignoreAux = \case
-      MsgAux _ -> False
-      _        -> True
+      MsgAux  _ -> Nothing
+      MsgRT   r -> Just $ MsgRT r
+      MsgUser u -> Just $ MsgUser u
+      MsgProc p -> Just $ MsgProc p
 
     onlyUser = \case
       MsgUser uo -> Just uo
@@ -352,9 +405,9 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
     simRunO t outs = do
       for_ outs $ simLog t
 
-      for_ (filter ignoreAux outs) $ \o -> do
-        let om = show (t, o)
-        whenJust (simOActWrite simOMsg) $ flip hPutStrLn om
+      for_ (mapMaybe ignoreAux outs) $ \o -> do
+        let om = serialise (t, o)
+        whenJust (simOActWrite simOMsg) $ flip LBS.hPut om
         whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
 
       -- send all the outs to simUserO in one batch
@@ -372,6 +425,7 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
 grunSimIO
   :: forall p xs
    . SimLog (State p) xs
+  => SimUserRe (State p) xs
   => SimReRe (State p) xs
   => (  ProcEnv (SimFullState (State p) xs) IO
      -> SimFullState (State p) xs
@@ -395,11 +449,11 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
                             (newSimState seed simInitLatency initPids)
                             initXState
       Just h -> do
-        r <- annotateRethrow (hGetLine h) $ \e -> do
+        r <- annotateRethrow (LBS.hGetContents h) $ \e -> do
           annotateIOError e "simIState" Nothing Nothing
-        pure (readNote "simIState read failed" r)
-    whenJust (simIActWrite simIState) $ flip hPutStrLn (show ifs)
-    appendFile systemEmptyFile $ show ifs <> "\n" -- force to avoid thunks
+        pure (deserialiseNote "simIState read failed" r)
+    whenJust (simIActWrite simIState) $ flip LBS.hPut (serialise ifs)
+    LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
 
     {-
     TODO: this is a hack that prevents ctrl-c from quitting the program in
@@ -443,10 +497,10 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
       let t = simNow (simState ofs)
       whenJust (simOActCompare simOMsg) $ compareOMsg simError t Nothing
 
-      let os = show ofs
-      whenJust (simOActWrite simOState) $ flip hPutStrLn os
+      let os = serialise ofs
+      whenJust (simOActWrite simOState) $ flip LBS.hPut os
       whenJust (simOActCompare simOState) $ \h -> do
-        os' <- annotateRethrow (hGetLine h)
+        os' <- annotateRethrow (LBS.hGetContents h)
           $ \e -> annotateIOError e "simOState" Nothing Nothing
         when (os /= os') $ simError $ do
           SimFailedReplayCompare "simOState" t os' os
@@ -459,6 +513,7 @@ runSimIO
    . SimProcess p
   => Ctx p IO
   => SimLog (State p) ()
+  => SimUserRe (State p) ()
   => SimReRe (State p) ()
   => SimOptions
   -> (Pid -> IO (State p))
