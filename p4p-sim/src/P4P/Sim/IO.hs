@@ -158,17 +158,20 @@ type SimUserRe ps xs
     , Show (XUserO xs)
     )
 
--- | Convenience type alias for being able to record and replay a simulation.
-type SimReRe (codec :: Type -> Constraint) ps xs
+type SimReReP (codec :: Type -> Constraint) ps
   = ( codec ps
     , codec (UserI ps)
     , codec (UserO ps)
     , codec (PAddr ps)
     , codec (PMsg ps)
-    , codec xs
-    , codec (XUserI xs)
-    , codec (XUserO xs)
     )
+
+type SimReReX (codec :: Type -> Constraint) xs
+  = (codec xs, codec (XUserI xs), codec (XUserO xs))
+
+-- | Convenience type alias for being able to record and replay a simulation.
+type SimReRe (codec :: Type -> Constraint) ps xs
+  = (SimReReP codec ps, SimReReX codec xs)
 
 type SimUserIO ps xs
   = (IO (Maybe (SimXUserI ps xs)), [SimXUserO ps xs] -> IO ())

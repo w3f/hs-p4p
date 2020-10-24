@@ -1,7 +1,9 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs            #-}
-{-# LANGUAGE RankNTypes       #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE TypeApplications    #-}
 
 module P4P.Sim.Experiments.Extension where
 
@@ -32,3 +34,9 @@ extOptions =
 data SExt xs where
   XNone :: SExt ()
   XKad :: SExt KSimState
+
+withSimExt
+  :: (c (), c KSimState) => SimExt -> (forall xs . c xs => SExt xs -> a) -> a
+withSimExt ext f = case ext of
+  ExtNone -> f XNone
+  ExtKad  -> f XKad

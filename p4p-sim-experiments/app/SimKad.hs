@@ -5,7 +5,6 @@
 
 -- external
 import           Control.Lens                           ((%%~), (&))
-import           Control.Op
 import           Crypto.Random.Extra                    (initializeFrom)
 
 -- external, impure
@@ -33,59 +32,6 @@ mkPState :: KParams -> Pid -> IO KS
 mkPState params p =
   let addr = mkAddr p
   in  newRandomState @ChaChaDRGInsecure getEntropy [addr] params
-
-kadOptions :: Parser (Int -> KParams)
-kadOptions =
-  mkParams
-    <$> (  option auto
-        <| long "x-kad-key-bytes"
-        <> help "Number of bytes of a key, e.g. 32 for 256 bits."
-        <> metavar "NUM"
-        <> value 32
-        <> showDefault
-        )
-    <*> (  option auto
-        <| long "x-kad-rep-routing"
-        <> help "Routing replication factor. i.e. Max-size of a k-bucket."
-        <> metavar "NUM"
-        <> value 32
-        <> showDefault
-        )
-    <*> (  option auto
-        <| long "x-kad-rep-storage"
-        <> help "Storage replication factor. TODO: not yet implemented."
-        <> metavar "NUM"
-        <> value 16
-        <> showDefault
-        )
-    <*> (  option auto
-        <| long "x-kad-parallel"
-        <> help "Max number of outstanding outgoing requests per query."
-        <> metavar "NUM"
-        <> value 8
-        <> showDefault
-        )
-    <*> (  option auto
-        <| long "x-kad-addrs-per-node"
-        <> help "Max number of addresses to store for a node"
-        <> metavar "NUM"
-        <> value 16
-        <> showDefault
-        )
-    <*> (  option auto
-        <| long "x-kad-speed-auto"
-        <> help "Speed up automatic behaviours e.g. refresh, for testing"
-        <> metavar "NUM"
-        <> value 1
-        <> showDefault
-        )
- where
-  mkParams kb rr rs p apn t i = (testingParams t i) { parKeyBytes     = kb
-                                                    , parRepRouting   = rr
-                                                    , parRepStorage   = rs
-                                                    , parParallel     = p
-                                                    , parAddrsPerNode = apn
-                                                    }
 
 main :: IO ()
 main = do

@@ -80,7 +80,7 @@ deserialiseNote ctx bs = case deserialiseOrFail bs of
   Right a   -> a
 
 data CodecWith f a where
-  CodecWith ::(Monoid s, Eq s) => (s -> Either String (s, a)) -> (a -> s) -> f s -> CodecWith f a
+  CodecWith :: (Monoid s, Eq s) => (s -> Either String (s, a)) -> (a -> s) -> f s -> CodecWith f a
 
 type SomeDecode a = CodecWith ((->) LBS.ByteString) a
 type SomeResidue a = CodecWith Maybe a

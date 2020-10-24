@@ -1,7 +1,9 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs            #-}
-{-# LANGUAGE RankNTypes       #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE TypeApplications    #-}
 
 module P4P.Sim.Experiments.Protocol where
 
@@ -32,3 +34,12 @@ protoOptions =
 data SProt ps where
   SEcho :: SProt EchoState
   SKad :: SProt (KState ChaChaDRGInsecure)
+
+withSimProto
+  :: (c EchoState, c (KState ChaChaDRGInsecure))
+  => SimProto
+  -> (forall ps . c ps => SProt ps -> a)
+  -> a
+withSimProto proto f = case proto of
+  ProtoEcho -> f SEcho
+  ProtoKad  -> f SKad

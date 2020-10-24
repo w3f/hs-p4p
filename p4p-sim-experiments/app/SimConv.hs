@@ -1,11 +1,13 @@
-{-# LANGUAGE ConstraintKinds     #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE GADTs               #-}
-{-# LANGUAGE PolyKinds           #-}
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE RecordWildCards     #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE ConstraintKinds      #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE PolyKinds            #-}
+{-# LANGUAGE RankNTypes           #-}
+{-# LANGUAGE RecordWildCards      #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeApplications     #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- external
 import           Codec.Serialise               (Serialise (..))
@@ -21,30 +23,23 @@ import           P4P.Sim.Experiments.Extension
 import           P4P.Sim.Experiments.Protocol
 
 
-type SimC ps xs
-  = ( Ord (PAddr ps)
-    , SimReRe Serialise ps xs
-    , SimReRe Show ps xs
-    , SimReRe Read ps xs
-    )
+type SimPC' ps
+  = (Ord (PAddr ps), SimReReP Serialise ps, SimReReP Show ps, SimReReP Read ps)
+class SimPC' ps => SimPC ps
+instance SimPC' ps => SimPC ps
 
-withSimProtoExt
-  :: SimConvOptions (SimProto, SimExt)
-  -> (forall ps xs . SimC ps xs => SProt ps -> SExt xs -> IO a)
-  -> IO a
-withSimProtoExt opt f = case proto of
-  ProtoEcho -> f SEcho XNone
-  ProtoKad  -> case ext of
-    ExtNone -> f SKad XNone
-    ExtKad  -> f SKad XKad
+type SimXC' xs = (SimReReX Serialise xs, SimReReX Show xs, SimReReX Read xs)
+class SimXC' xs => SimXC xs
+instance SimXC' xs => SimXC xs
+
+runMain :: SimConvOptions (SimProto, SimExt) -> IO ExitCode
+runMain opt = withSimProto @SimPC proto $ \(p :: SProt ps) -> do
+  withSimExt @SimXC ext $ \(x :: SExt xs) -> do
+    convertSimData @ps @xs opt
+    pure ExitSuccess
  where
   SimConvOptions {..} = opt
   (proto, ext)        = simConvXOpts
-
-runMain :: SimConvOptions (SimProto, SimExt) -> IO ExitCode
-runMain opt = withSimProtoExt opt $ \(p :: SProt ps) (x :: SExt xs) -> do
-  convertSimData @ps @xs opt
-  pure ExitSuccess
 
 simConvParseOptions :: Parser xo -> [String] -> IO (SimConvOptions xo)
 simConvParseOptions xopts = parseArgsIO'

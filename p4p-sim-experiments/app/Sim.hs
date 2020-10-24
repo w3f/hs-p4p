@@ -1,11 +1,14 @@
-{-# LANGUAGE ConstraintKinds     #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE GADTs               #-}
-{-# LANGUAGE PolyKinds           #-}
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE RecordWildCards     #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE ConstraintKinds      #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE LambdaCase           #-}
+{-# LANGUAGE PolyKinds            #-}
+{-# LANGUAGE RankNTypes           #-}
+{-# LANGUAGE RecordWildCards      #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeApplications     #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- external
 import           Codec.Serialise              (Serialise (..))
@@ -30,29 +33,28 @@ import           P4P.Sim.Util                 (ChaChaDRGInsecure, PMut',
 import           P4P.Sim.Util.IO              (bracketHEF, optionTerminalStdIO)
 
 
-type SimC ps
+type SimC' ps
   = ( SimProcess (PMut' ps)
     , SimLog ps ()
     , SimUserRe ps ()
     , SimReRe Serialise ps ()
     , Proc ps
     )
+class SimC' ps => SimC ps
+instance SimC' ps => SimC ps
 
-withSimProto
-  :: SimXOptions SimProto
-  -> (forall ps . SimC ps => SProt ps -> (Pid -> IO ps) -> IO a)
-  -> IO a
-withSimProto opt f = case simXOpts of
-  ProtoEcho -> f SEcho $ \p -> pure (EState [p] 0)
-  ProtoKad  -> f SKad $ \p -> do
+mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
+mkPState simOpts = \case
+  SEcho -> \p -> pure (EState [p] 0)
+  SKad  -> \p -> do
     let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick simOpts
         addr   = pack $ "addr:" <> show p
     newRandomState @ChaChaDRGInsecure getEntropy [addr] params
-  where SimXOptions {..} = opt
 
 -- run via stdin/stdout
 runStd :: SimXOptions SimProto -> IO ExitCode
-runStd opt = withSimProto opt $ \(p :: SProt ps) mkPS -> do
+runStd opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
+  let mkPS    = mkPState simOpts p
   let prompt  = "p4p " <> drop 5 (show simXOpts) <> "> "
   let mkStdIO = optionTerminalStdIO simOpts "p4p" ".sim_history" prompt
   bracketHEF mkStdIO $ \stdio -> do
@@ -64,7 +66,8 @@ newtype UserSimAsync' ps = UserSimAsync' (UserSimAsync ps ())
 
 -- run via tb-queues, can be loaded from GHCI
 runTB :: SimXOptions SimProto -> IO (DSum SProt UserSimAsync')
-runTB opt = withSimProto opt $ \(p :: SProt ps) mkPS -> do
+runTB opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
+  let mkPS      = mkPState simOpts p
   let runSimIO' = runSimIO @(PMut' ps) simOpts mkPS
   handles <- newSimAsync @(PMut' ps) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles

@@ -114,7 +114,6 @@ Executable sim-kad
     , p4p-sim
     , p4p-protocol-dht-kad
     , p4p-common
-    , op
     , lens
   HS-Source-Dirs: app
   Main-Is: SimKad.hs

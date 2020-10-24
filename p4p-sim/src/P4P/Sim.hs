@@ -44,6 +44,8 @@ module P4P.Sim
   -- * IO and utilities
   , SimLog
   , SimUserRe
+  , SimReReP
+  , SimReReX
   , SimReRe
   , defaultSimUserIO
   , defaultStdIO
