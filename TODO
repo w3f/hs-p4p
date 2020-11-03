@@ -25,7 +25,6 @@ Technical debt
 ==============
 
 - update crypto interface
-- tools to pretty-print data formats, for diffing
 
 
 Low-level features

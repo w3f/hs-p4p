@@ -62,7 +62,6 @@ import           System.IO                      (BufferMode (..), Handle,
                                                  stderr, stdin)
 import           System.IO.Error                (annotateIOError, catchIOError,
                                                  isEOFError)
-import           Text.Pretty.Simple             (pHPrint)
 import           UnliftIO.Exception             (bracket, mask, throwIO)
 
 -- internal
@@ -467,9 +466,7 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
         mkRT    = defaultRT @_ @xs opt realNow simUserIO simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
       let env = ProcEnv guard simRunI simRunO
-      when simDbgPprState $ pHPrint stderr ifs
       ofs <- lrunSim env ifs
-      when simDbgPprState $ pHPrint stderr ofs
 
       let t = simNow (simState ofs)
       whenJust (simOActCompare simOMsg) $ compareOMsg simError t Nothing
@@ -538,12 +535,12 @@ convertSimData opt = do
   bs0 <- LBS.hGetContents hi
   unless (LBS.null bs0) $ do
     case someDecodeStream bs0 (allCodecs @(SimXI ps xs)) of
-      Right ((k, v), res) -> writeAll ho k v res
+      Right ((k, v), res) -> writeAll ho False k v res
       Left erri -> case someDecodeStream bs0 (allCodecs @(SimXO' ps xs)) of
-        Right ((k, v), res) -> writeAll ho k v res
+        Right ((k, v), res) -> writeAll ho False k v res
         Left erro ->
           case someDecodeStream bs0 (allCodecs @(SimFullState ps xs)) of
-            Right ((k, v), res) -> writeAll ho k v res
+            Right ((k, v), res) -> writeAll ho True k v res
             Left  errs          -> do
               let errors =
                     fmap ("imsg  (SimXI)       : " <>) erri
@@ -559,13 +556,15 @@ convertSimData opt = do
   writeAll
     :: (Serialise a, Show a)
     => Handle
+    -> Bool
     -> CodecFormat
     -> a
     -> SomeResidue a
     -> IO ()
-  writeAll ho k v res = do
+  writeAll ho p k v res = do
+    let showLn' = if p then pShowLn else showLn
     let (enc, i, o) = case k of
-          CodecCbor -> (LBS.pack . showLn, CodecCbor, CodecRead)
+          CodecCbor -> (LBS.pack . showLn', CodecCbor, CodecRead)
           CodecRead -> (serialise, CodecRead, CodecCbor)
     hPutStrLn stderr $ "input  format: " <> show i
     hPutStrLn stderr $ "output format: " <> show o

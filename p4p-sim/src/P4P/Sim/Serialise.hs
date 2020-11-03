@@ -10,6 +10,7 @@ module P4P.Sim.Serialise where
 -- external
 import qualified Codec.CBOR.Read                 as CBOR.Read
 import qualified Data.ByteString.Lazy.Char8      as LBS
+import qualified Data.Text.Lazy                  as T
 import qualified Text.ParserCombinators.ReadP    as Read
 import qualified Text.ParserCombinators.ReadPrec as Read
 
@@ -24,6 +25,10 @@ import           Data.Primitive.MutVar           (MutVar (..), newMutVar,
 import           GHC.Generics                    (Generic)
 import           GHC.Stack                       (HasCallStack)
 import           System.IO                       (Handle)
+import           Text.Pretty.Simple              (StringOutputStyle (..),
+                                                  defaultOutputOptionsNoColor,
+                                                  outputOptionsStringStyle,
+                                                  pShowOpt)
 import           Text.Read                       (readPrec)
 
 
@@ -115,6 +120,11 @@ withDecodeStream ctx act v (CodecWith dec enc res') = do
 
 showLn :: Show a => a -> String
 showLn x = show x <> "\n"
+
+pShowLn :: Show a => a -> String
+pShowLn x = T.unpack (pShowOpt opt x) <> "\n"
+ where
+  opt = defaultOutputOptionsNoColor { outputOptionsStringStyle = Literal }
 
 cborCodec :: Serialise a => SomeDecode a
 cborCodec = CodecWith deserialiseContinue serialise id

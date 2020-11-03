@@ -308,7 +308,6 @@ data SimOptions = SimOptions
   , simLogOutput    :: !(Either CInt FilePath)
   , simLogTimeFmt   :: !String
   -- :^ logging options
-  , simDbgPprState  :: !Bool -- TODO: integrate with logging, and ppr messages
   , simDbgEmptySimX :: !Bool
   -- :^ debugging options
   }
@@ -397,11 +396,6 @@ simOptions =
         <> metavar "FMT"
         <> help "Logging timestamp format-string."
         <> value "%Y-%m-%d %H:%M:%S.%3q %z"
-        <> showDefault
-        )
-    <*> (  switch
-        <| long "dbg-ppr-state"
-        <> help "Pretty-print the state before and after execution"
         <> showDefault
         )
     <*> (  switch

@@ -78,14 +78,15 @@ Library
     , lens
     , mutable-lens
     , optparse-applicative
+    , pretty-simple
     , safe
     , schedule
     , serialise
+    , text
     , transformers
     -- P4P.Sim.IO:
     , async
     , directory
-    , pretty-simple
     , stm
     , time
     , unliftio
