@@ -8,10 +8,8 @@ Stats
   this framework for general requests & protocols
 
 Execution
-- Integrating with a real networking stack
-  - since real stacks are impure, do this via commands (open stream, send data)
-    & events ("stream unblocked" for flow control, etc)
-- Flow control, do we need anything more on top of P4P.Proc.Util.FlowControl?
+- implement adapter from Proc to SProc
+- implement p4p-rt, p4p-rt-quic as described in P4P.Proc.Stream
 
 Later
 -----

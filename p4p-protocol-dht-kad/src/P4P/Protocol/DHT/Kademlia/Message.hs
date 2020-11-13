@@ -276,7 +276,7 @@ type KUserI = Command
 type KUserO = CommandReply
 
 instance P.ProtoMsg Msg where
-  type Addr Msg = NodeAddr
+  type Ent Msg = NodeAddr
   getTarget = dstAddr
   setSource srcAddr' m = m { srcAddr = srcAddr' }
 

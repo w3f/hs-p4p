@@ -31,7 +31,7 @@ type EchoUserI = String
 type EchoUserO = String
 
 instance ProtoMsg EchoMsg where
-  type Addr EchoMsg = EAddr
+  type Ent EchoMsg = EAddr
   getTarget = dst
   setSource src' m = m { src = src' }
 

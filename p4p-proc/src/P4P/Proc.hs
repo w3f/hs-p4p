@@ -29,3 +29,4 @@ where
 import           Data.Void          (Void)
 import           P4P.Proc.Instances
 import           P4P.Proc.Internal
+import           P4P.Proc.Types

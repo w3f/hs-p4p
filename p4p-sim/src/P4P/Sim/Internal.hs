@@ -244,7 +244,7 @@ simReact input = execWriterT $ do
 
     -- deliver outputs
     for_ outs $ \case
-      MsgRT (RTAddr _ _) -> do
+      MsgRT (RTAddr _) -> do
         pure () -- TODO: handle this properly
       msg@(MsgUser uo) -> do
         logS $ SimMsgSend pid msg

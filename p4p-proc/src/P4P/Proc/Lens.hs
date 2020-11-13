@@ -8,6 +8,7 @@ import           Data.Schedule     (Tick)
 
 -- internal
 import           P4P.Proc.Internal
+import           P4P.Proc.Types
 
 
 makePrisms ''RuntimeI
