@@ -2,28 +2,21 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 
-module P4P.Sim.Util.IO
-  ( onExceptionShow
+module P4P.RT.Client
+  ( StdIO
+  , onExceptionShow
   , bracketHEF
   , maybeTerminalStdIO
   , optionTerminalStdIO
-  , hookAutoJoinQuit
   )
 where
 
 -- external
-import           Control.Monad                    (when)
 import           Control.Monad.Extra              (whenJust)
 
 -- external, IO & system
 import qualified Control.Exception                as E
 
-import           Control.Concurrent.Async         (race)
-import           Control.Concurrent.STM           (atomically)
-import           Control.Concurrent.STM.TBQueue   (newTBQueueIO, readTBQueue,
-                                                   writeTBQueue)
-import           Control.Concurrent.STM.TVar      (newTVarIO, readTVarIO,
-                                                   writeTVar)
 import           Control.Monad.Catch              (MonadMask, bracketOnError,
                                                    handle)
 import           Control.Monad.IO.Class           (MonadIO)
@@ -39,15 +32,26 @@ import           System.Console.Haskeline.IO      (cancelInput, closeInput,
 import           System.Directory                 (XdgDirectory (..),
                                                    createDirectoryIfMissing,
                                                    getXdgDirectory)
-import           System.IO                        (hPutStrLn, stderr)
+import           System.IO                        (Handle, hGetLine, hPutStrLn,
+                                                   stderr, stdin)
+import           System.IO.Error                  (catchIOError, isEOFError)
 import           System.Posix.IO                  (stdInput)
 import           System.Posix.Terminal            (queryTerminal)
 
 -- internal
-import           P4P.Sim.IO
-import           P4P.Sim.Options
-import           P4P.Sim.Types
+import           P4P.RT.Internal                  (defaultRTWouldInteract)
+import           P4P.RT.Options                   (RTOptions)
 
+
+type StdIO = (IO (Maybe String), String -> IO ())
+
+hGetLineOrEOF :: Handle -> IO (Maybe String)
+hGetLineOrEOF h = catchIOError
+  (Just <$> hGetLine h)
+  (\e -> if isEOFError e then pure Nothing else ioError e)
+
+defaultStdIO :: StdIO
+defaultStdIO = (hGetLineOrEOF stdin, putStrLn)
 
 onExceptionShow :: String -> IO a -> IO a
 onExceptionShow tag io = E.catch
@@ -70,7 +74,7 @@ tryAction action = withInterrupt loop
 
 -- | Set up a nice prompt if on a terminal, otherwise 'defaultStdIO'.
 maybeTerminalStdIO
-  :: Bool -> String -> String -> String -> IO (StdIO, IO (), IO ())
+  :: Bool -> String -> String -> String -> IO ((Bool, StdIO), IO (), IO ())
 maybeTerminalStdIO interactive dirname filename prompt = do
   queryTerminal stdInput >>= \case
     True | interactive -> do
@@ -88,52 +92,9 @@ maybeTerminalStdIO interactive dirname filename prompt = do
               modifyHistory (addHistoryUnlessConsecutiveDupe s')
             pure s
       o <- queryInput hd getExternalPrint
-      pure ((i, o), e, f)
-    _ -> pure (defaultStdIO, pure (), pure ())
+      pure ((True, (i, o)), e, f)
+    _ -> pure ((False, defaultStdIO), pure (), pure ())
 
 optionTerminalStdIO
-  :: SimOptions -> String -> String -> String -> IO (StdIO, IO (), IO ())
-optionTerminalStdIO opt = maybeTerminalStdIO (isInteractiveMode opt)
-
-{- | Convert a 'SimUserIO' to have auto-join and auto-quit behaviour.
-
-By design, processes are meant to be suspended at any time, and so they have no
-explicit awareness of, or any control over, when they are started or stopped.
-This slight hack adds support for auto-join/quit, by having the sim extension
-communicate this implicitly with the 'SimUserIO' that is driving it.
--}
-hookAutoJoinQuit
-  :: forall ps xs
-   . Bool
-  -> Bool
-  -> XHiI xs
-  -> (XHiO xs -> Bool)
-  -> SimUserIO ps xs
-  -> IO (SimUserIO ps xs)
-hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do
-  if not autoJoin && not autoQuit
-    then pure (ui, uo)
-    else do
-      started  <- newTVarIO False
-      finished <- newTBQueueIO 1
-      let ui' = readTVarIO started >>= \case
-            False -> do
-              atomically $ writeTVar started True
-              pure (Just (SimExtensionI joinMsg))
-            -- note: race in this context is typically unsafe, but since we're
-            -- quitting the program on one of the branches it's ok here. see
-            -- https://github.com/simonmar/async/issues/113 for details.
-            -- we have a safe version in 'foreverInterleave' in p4p-common but
-            -- that carries additional overhead.
-            True -> do
-              fmap (either id id) $ race ui $ do
-                atomically (readTBQueue finished)
-                pure Nothing
-          isQuitMsg' = \case
-            SimExtensionO m | isQuitMsg m -> True
-            _                             -> False
-          uo' outs = do
-            uo outs
-            when (autoQuit && any isQuitMsg' outs) $ do
-              atomically $ writeTBQueue finished ()
-      pure (ui', uo')
+  :: RTOptions -> String -> String -> String -> IO ((Bool, StdIO), IO (), IO ())
+optionTerminalStdIO opt = maybeTerminalStdIO (defaultRTWouldInteract opt)

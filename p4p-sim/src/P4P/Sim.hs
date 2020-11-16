@@ -13,17 +13,13 @@ module P4P.Sim
   , SimProcEvt
   , SimState'(..)
   , SimState
-  , SimError(..)
+  , SimFullState
   , NonEmpty(..)
   , newSimState
-  , SimRT(..)
   , SimT
   , SimProcess
-  , proceedAll
-  , suspendAll
   , simulate
   , runSim
-  , convertSimData
   -- * Extensions
   , SimXProcIface(..)
   , runSimX
@@ -31,16 +27,14 @@ module P4P.Sim
   -- * Options
   , SimXOptions(..)
   , SimOptions(..)
+  , _simRTOptions
   , mkParser
   , parseArgsIO
   , parseArgsIO'
   , simXOptions
   , simOptions
-  , SimConvOptions(..)
-  , simConvOptions
   , module Options.Applicative
-  , showOptions
-  , allOptions
+  , module P4P.RT.Options
   -- * IO and utilities
   , SimLog
   , SimUserRe
@@ -48,18 +42,25 @@ module P4P.Sim
   , SimReReX
   , SimReRe
   , defaultSimUserIO
-  , defaultStdIO
   , grunSimIO
   , runSimIO
-  , handleSimResult
-  , UserSimAsync(..)
-  , newSimAsync
+  -- * RT generic utils
+  , handleRTResult
+  , convertProcData
+  , RTAsync(..)
+  , newRTAsync
+  , bracketHEF
+  , hookAutoJoinQuit
+  , optionTerminalStdIO
   )
 where
 
 import           Data.List.NonEmpty  (NonEmpty (..))
-
 import           Options.Applicative
+
+import           P4P.RT
+import           P4P.RT.Options
+
 import           P4P.Sim.Extension
 import           P4P.Sim.Internal
 import           P4P.Sim.IO

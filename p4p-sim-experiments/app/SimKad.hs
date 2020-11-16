@@ -15,15 +15,9 @@ import           System.Exit                            (exitWith)
 import           P4P.Protocol.DHT.Kademlia
 import           P4P.Sim
 import           P4P.Sim.Experiments.Extension.Kademlia
-import           P4P.Sim.Options                        (SimIAction (..),
-                                                         SimIOAction (..),
-                                                         delayedInitMode,
-                                                         _simIOAction)
+import           P4P.Sim.Options                        (delayedInitMode)
 import           P4P.Sim.Util                           (ChaChaDRGInsecure,
                                                          PMut', getEntropy)
-import           P4P.Sim.Util.IO                        (bracketHEF,
-                                                         hookAutoJoinQuit,
-                                                         optionTerminalStdIO)
 
 
 type KProc = PMut' KS
@@ -37,20 +31,21 @@ main :: IO ()
 main = do
   let parser = mkParser "sim-kad" "kademlia test" (simXOptions kadOptions)
   SimXOptions {..} <- parseArgsIO parser =<< getArgs
+  let rtOpts@RTOptions {..} = simRTOptions simOpts
 
   -- auto-join if we're
   --   - not reading input state
-  let autoJoin = case simIActRead (simIState (simIOAction simOpts)) of
+  let autoJoin = case procIActRead (procIState rtProcIOAction) of
         Nothing -> True
         Just _  -> False
   -- auto-quit if we're perform an init-mode action. in this case, we will
   -- auto-join (i.e. send some messages), then write the output state to the
   -- specified input-state-file (if any), then quit
-  let (autoQuit, simOpts') = simOpts & _simIOAction %%~ delayedInitMode
+  let (autoQuit, simOpts') =
+        simOpts & _simRTOptions . _rtProcIOAction %%~ delayedInitMode
 
-  let mkStdIO =
-        optionTerminalStdIO simOpts "p4p" ".sim-kad_history" "p4p Kad> "
-  bracketHEF mkStdIO $ \stdio -> do
+  let mkStdIO = optionTerminalStdIO rtOpts "p4p" ".sim-kad_history" "p4p Kad> "
+  bracketHEF mkStdIO $ \(isInteractive, stdio) -> do
     let joinStarted = \case
           KSimJoinStarted -> True
           _               -> False
@@ -60,11 +55,12 @@ main = do
 
     drg <- initializeFrom getEntropy
     let initXState = KSimState drg Nothing
-    let params = simXOpts $ fromIntegral $ 1000 `div` simMsTick simOpts
-    grunSimIO @KProc @KSimState (runSimXS @KProc @KSimState)
-                                simOpts'
-                                initXState
-                                (mkPState params)
-                                simUserIO
-      >>= handleSimResult
+    let params     = simXOpts $ fromIntegral $ 1000 `div` rtMsTick
+    grunSimIO @KS @KSimState (runSimXS @KProc @KSimState)
+                             simOpts'
+                             initXState
+                             (mkPState params)
+                             isInteractive
+                             simUserIO
+      >>= handleRTResult
       >>= exitWith

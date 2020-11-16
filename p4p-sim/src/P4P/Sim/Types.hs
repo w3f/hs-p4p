@@ -15,7 +15,6 @@
 module P4P.Sim.Types where
 
 -- external
-import qualified Data.ByteString.Lazy  as LBS
 import qualified Data.Map.Strict       as M
 import qualified Data.Sequence         as SQ
 
@@ -156,15 +155,6 @@ data SimAuxO' ao i o a =
   | SimProcEvent !(SimProcEvt' i o a)
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 type SimAuxO ps = SimAuxO' (AuxO ps) (PMsgI ps) (PMsgO ps) (Addr ps)
-
-data SimError = SimFailedReplayCompare
-  { simFailedReplayCompareType     :: !String
-  , simFailedReplayCompareTick     :: !Tick
-  , simFailedReplayCompareExpected :: !LBS.ByteString
-  , simFailedReplayCompareActual   :: !LBS.ByteString
-  }
-    -- ^ Failed to compare replay at the given tick.
-  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 class (ProcIface xs, AuxO xs ~ Void) => SimXProcIface ps xs where
   type XHiI xs

@@ -68,34 +68,24 @@ Library
   Build-Depends:
       p4p-common
     , p4p-proc
+    , p4p-rt
     , op
     , binary
-    , bytestring
-    , cborg
     , containers
     , cryptonite
     , extra
     , lens
     , mutable-lens
     , optparse-applicative
-    , pretty-simple
     , safe
     , schedule
     , serialise
-    , text
     , transformers
     -- P4P.Sim.IO:
     , async
-    , directory
     , stm
-    , time
-    , unliftio
     -- P4P.Sim.Util:
     , primitive
-    -- P4P.Sim.Util.IO:
-    , exceptions
-    , haskeline
-    , unix
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Sim
@@ -105,10 +95,8 @@ Library
     P4P.Sim.IO
     P4P.Sim.Numeric
     P4P.Sim.Options
-    P4P.Sim.Serialise
     P4P.Sim.Types
     P4P.Sim.Util
-    P4P.Sim.Util.IO
 
 Test-Suite doctests
   Import: generic, executable

@@ -30,7 +30,6 @@ import           P4P.Sim.EchoProcess          (EchoState (..))
 import           P4P.Sim.Experiments.Protocol
 import           P4P.Sim.Util                 (ChaChaDRGInsecure, PMut',
                                                getEntropy)
-import           P4P.Sim.Util.IO              (bracketHEF, optionTerminalStdIO)
 
 
 type SimC' ps
@@ -47,29 +46,32 @@ mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
 mkPState simOpts = \case
   SEcho -> \p -> pure (EState [p] 0)
   SKad  -> \p -> do
-    let params = defaultParams $ fromIntegral $ 1000 `div` simMsTick simOpts
+    let params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick procOpts
         addr   = pack $ "addr:" <> show p
     newRandomState @ChaChaDRGInsecure getEntropy [addr] params
+  where procOpts = simRTOptions simOpts
 
 -- run via stdin/stdout
 runStd :: SimXOptions SimProto -> IO ExitCode
 runStd opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
   let mkPS    = mkPState simOpts p
   let prompt  = "p4p " <> drop 5 (show simXOpts) <> "> "
-  let mkStdIO = optionTerminalStdIO simOpts "p4p" ".sim_history" prompt
-  bracketHEF mkStdIO $ \stdio -> do
+  let mkStdIO = optionTerminalStdIO simRTOptions "p4p" ".sim_history" prompt
+  bracketHEF mkStdIO $ \(iact, stdio) -> do
     let simUserIO = defaultSimUserIO @ps @() stdio
-    runSimIO @(PMut' ps) simOpts mkPS simUserIO >>= handleSimResult
-  where SimXOptions {..} = opt
+    runSimIO @(PMut' ps) simOpts mkPS iact simUserIO >>= handleRTResult
+ where
+  SimXOptions {..} = opt
+  SimOptions {..}  = simOpts
 
-newtype UserSimAsync' ps = UserSimAsync' (UserSimAsync ps ())
+newtype UserSimAsync' ps = UserSimAsync' (RTAsync (SimFullState ps ()))
 
 -- run via tb-queues, can be loaded from GHCI
 runTB :: SimXOptions SimProto -> IO (DSum SProt UserSimAsync')
 runTB opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
   let mkPS      = mkPState simOpts p
-  let runSimIO' = runSimIO @(PMut' ps) simOpts mkPS
-  handles <- newSimAsync @(PMut' ps) (Just print) runSimIO'
+  let runSimIO' = runSimIO @(PMut' ps) simOpts mkPS False
+  handles <- newRTAsync @(SimFullState ps ()) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles
   where SimXOptions {..} = opt
 

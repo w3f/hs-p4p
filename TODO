@@ -35,7 +35,7 @@ Stats
   - add a command to request debug info
 
 Execution
-- Save/load for specific individual procs
+- rere AuxO for Sim, so we can see what individual procs send/recv
 
 
 High-level features

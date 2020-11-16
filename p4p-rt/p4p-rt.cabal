@@ -1,5 +1,5 @@
 Cabal-Version: 2.2
-Name: p4p-sim-experiments
+Name: p4p-rt
 Version: 0.0
 Build-Type: Simple
 License: AGPL-3.0-or-later
@@ -9,9 +9,9 @@ Maintainer: infinity0@pwned.gg
 Stability: alpha
 Homepage: https://github.com/w3f/hs-p4p
 Bug-Reports: https://github.com/w3f/hs-p4p/issues
-Synopsis: peer-for-peer library, simulation experiments
-Description: Research-level network experiments conducted on p4p-sim
-Category: Network, P2P, Simulation, Experiments
+Synopsis: peer-for-peer library, impure runtime utilities and integration
+Description: TODO
+Category: Network, P2P, Runtime
 Tested-With: GHC >= 8.10.1
 
 Source-Repository head
@@ -66,55 +66,51 @@ Common executable
 Library
   Import: generic
   Build-Depends:
-      p4p-sim
-    , p4p-rt
+      p4p-common
     , p4p-proc
-    , p4p-protocol-dht-kad
-    , p4p-common
     , op
+    , extra
+    , async
     , binary
     , bytestring
-    , containers
+    , cborg
+    , directory
     , lens
+    , optparse-applicative
+    , pretty-simple
+    , primitive
+    , schedule
     , serialise
-    , transformers
+    , stm
+    , text
+    , time
+    , unliftio
+    -- P4P.RT.Client:
+    , exceptions
+    , haskeline
+    , unix
   HS-Source-Dirs: src
   Exposed-Modules:
-    P4P.Sim.Experiments.Protocol
-    P4P.Sim.Experiments.Extension
-    P4P.Sim.Experiments.Extension.Kademlia
+    P4P.RT
+    P4P.RT.Client
+    P4P.RT.Options
+    P4P.RT.Internal
+    P4P.RT.Internal.Serialise
 
-Executable sim
+Test-Suite doctests
   Import: generic, executable
   Build-Depends:
-      p4p-sim-experiments
-    , p4p-sim
-    , p4p-proc
-    , p4p-protocol-dht-kad
-    , op
-    , bytestring
-    , dependent-sum
-    , serialise
-  HS-Source-Dirs: app
-  Main-Is: Sim.hs
+      doctest
+  HS-Source-Dirs: test
+  Type: exitcode-stdio-1.0
+  Main-Is: DocTests.hs
 
-Executable sim-conv
+Test-Suite unit
   Import: generic, executable
   Build-Depends:
-      p4p-sim-experiments
-    , p4p-sim
-    , p4p-proc
-    , serialise
-  HS-Source-Dirs: app
-  Main-Is: SimConv.hs
-
-Executable sim-kad
-  Import: generic, executable
-  Build-Depends:
-      p4p-sim-experiments
-    , p4p-sim
-    , p4p-protocol-dht-kad
-    , p4p-common
-    , lens
-  HS-Source-Dirs: app
-  Main-Is: SimKad.hs
+      tasty
+--    , tasty-quickcheck
+--    , tasty-hunit
+  HS-Source-Dirs: test
+  Type: exitcode-stdio-1.0
+  Main-Is: UnitTests.hs

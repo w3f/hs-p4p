@@ -12,135 +12,39 @@
 module P4P.Sim.IO where
 
 -- external, pure
-import qualified Data.ByteString.Lazy.Char8     as LBS
 import qualified Data.Map.Strict                as M
 import qualified Data.Set                       as S
 
-import           Codec.Serialise                (Serialise (..), serialise)
-import           Control.Clock                  (Clocked (..))
-import           Control.Monad                  (forever, join, unless, void,
-                                                 when)
-import           Control.Monad.Extra            (untilJustM, whenJust)
-import           Control.Op
-import           Data.Either                    (fromRight, lefts)
-import           Data.Foldable                  (for_, toList, traverse_)
+import           Codec.Serialise                (Serialise (..))
+import           Control.Monad                  (when)
+import           Control.Monad.Extra            (untilJustM)
+import           Data.Foldable                  (traverse_)
 import           Data.Kind                      (Constraint, Type)
-import           Data.List                      (intercalate)
-import           Data.List.NonEmpty             (NonEmpty, fromList)
-import           Data.Maybe                     (mapMaybe)
-import           Data.Schedule                  (Tick)
-import           Data.Traversable               (for)
-import           Data.Void                      (Void)
-import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
-                                                 PMsgO, ProcEnv (..),
-                                                 ProcIface (..), Process (..),
+import           Data.List.NonEmpty             (NonEmpty)
+import           P4P.Proc                       (GMsg (..), GMsgO, PMsgI, PMsgO,
+                                                 ProcEnv (..), ProcIface (..),
+                                                 Process (..), Tick,
                                                  UProtocol (..))
 import           Text.Read                      (readEither)
 
 -- external, IO
-import           Control.Clock.IO               (Intv (..), clockWithIO,
-                                                 interval, newClock)
-import           Control.Concurrent.Async       (async, cancel, link, link2,
-                                                 wait)
-import           Control.Concurrent.Async.Extra (foreverInterleave)
-import           Control.Concurrent.STM         (STM, atomically)
+import           Control.Concurrent.Async       (race)
+import           Control.Concurrent.STM         (atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
-import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
-                                                 readTVarIO, writeTVar)
+import           Control.Concurrent.STM.TVar    (newTVarIO, readTVarIO,
+                                                 writeTVar)
 import           Crypto.Random.Entropy          (getEntropy)
 import           Crypto.Random.Extra            (ScrubbedBytes)
-import           Data.Time                      (defaultTimeLocale, formatTime,
-                                                 getZonedTime)
-import           Foreign.C.Types                (CInt)
-import           GHC.IO.Handle.FD               (fdToHandle)
-import           System.Directory               (doesPathExist)
-import           System.Exit                    (ExitCode (..))
-import           System.IO                      (BufferMode (..), Handle,
-                                                 IOMode (..), hClose, hGetLine,
-                                                 hIsEOF, hPutStrLn,
-                                                 hSetBuffering, openBinaryFile,
-                                                 stderr, stdin)
-import           System.IO.Error                (annotateIOError, catchIOError,
-                                                 isEOFError)
-import           UnliftIO.Exception             (bracket, mask, throwIO)
+import           P4P.RT
 
 -- internal
 import           P4P.Sim.Extension
 import           P4P.Sim.Internal
-import           P4P.Sim.Options                (SimConvOptions (..),
-                                                 SimIAction (..),
-                                                 SimIOAction (..),
-                                                 SimLogging (..),
-                                                 SimOAction (..),
-                                                 SimOptions (..),
-                                                 isInteractiveMode,
-                                                 systemEmptyFile)
-import           P4P.Sim.Serialise
+import           P4P.Sim.Options                (SimLogging (..),
+                                                 SimOptions (..))
 import           P4P.Sim.Types
 
-
-hGetLineOrEOF :: Handle -> IO (Maybe String)
-hGetLineOrEOF h = catchIOError
-  (Just <$> hGetLine h)
-  (\e -> if isEOFError e then pure Nothing else ioError e)
-
-mkHandle :: IOMode -> Either CInt FilePath -> IO Handle
-mkHandle mode fdOrFile = do
-  h <- case fdOrFile of
-    Right path -> openBinaryFile path mode
-    Left  fd   -> fdToHandle fd
-  hSetBuffering h LineBuffering
-  pure h
-
-rethrow :: (IOError -> IOError) -> IO a -> IO a
-rethrow f act = catchIOError act $ throwIO . f
-
-type DeferredIO a = Either String (IO a)
-
-runDeferredIO :: Traversable t => t (DeferredIO a) -> IO (t a)
-runDeferredIO res = case lefts (toList res) of
-  -- check if there are any errors; only if none, then run all deferred IO at once
-  []  -> for res $ fromRight $ error "unreachable"
-  err -> fail $ "errors: " <> intercalate "; " err
-
-readIfExist :: String -> FilePath -> IO (DeferredIO Handle)
-readIfExist n p = doesPathExist p >$> \case
-  True  -> Right $ openBinaryFile p ReadMode
-  False -> Left $ "path " <> n <> ": does not exist for reading: " <> p
-
-writeIfNonexist :: String -> FilePath -> IO (DeferredIO Handle)
-writeIfNonexist n p = doesPathExist p >$> \case
-  False -> Right $ openBinaryFile p WriteMode
-  True  -> Left $ "path " <> n <> ": conflict exists for writing: " <> p
-
-dOpenIAction
-  :: String -> SimIAction FilePath -> IO (SimIAction (DeferredIO Handle))
-dOpenIAction n SimIAction {..} =
-  SimIAction
-    <$> traverse (readIfExist $ n <> "/IActRead")      simIActRead
-    <*> traverse (writeIfNonexist $ n <> "/IActWrite") simIActWrite
-
-dOpenOAction
-  :: String -> SimOAction FilePath -> IO (SimOAction (DeferredIO Handle))
-dOpenOAction n SimOAction {..} =
-  SimOAction
-    <$> traverse (writeIfNonexist $ n <> "/OActWrite") simOActWrite
-    <*> traverse (readIfExist $ n <> "/OActCompare")   simOActCompare
-
-dOpenIOAction :: SimIOAction FilePath -> IO (SimIOAction (DeferredIO Handle))
-dOpenIOAction SimIOAction {..} =
-  SimIOAction
-    <$> dOpenIAction "IState" simIState
-    <*> dOpenIAction "IMsg"   simIMsg
-    <*> dOpenOAction "OMsg"   simOMsg
-    <*> dOpenOAction "OState" simOState
-
-openIOAction :: SimIOAction FilePath -> IO (SimIOAction Handle)
-openIOAction a = dOpenIOAction a >>= runDeferredIO
-
-closeIOAction :: SimIOAction Handle -> IO ()
-closeIOAction = void . traverse hClose
 
 -- | Convenience type alias for being able to type in and out a simulation.
 type SimUserRe ps xs
@@ -180,20 +84,103 @@ type SimReReX (codec :: Type -> Constraint) xs
 type SimReRe (codec :: Type -> Constraint) ps xs
   = (SimReReP codec ps, SimReReX codec xs)
 
-type SimUserIO ps xs = (IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())
-type UserSimIO ps xs = (Maybe (SimXHiI ps xs) -> IO (), IO [SimXHiO ps xs])
-type UserSimSTM ps xs = (Maybe (SimXHiI ps xs) -> STM (), STM [SimXHiO ps xs])
-type StdIO = (IO (Maybe String), String -> IO ())
+type SimLog ps xs
+  = ( Show ps
+    , Show (Addr ps)
+    , Show (PMsgI ps)
+    , Show (PMsgO ps)
+    , Show (HiO ps)
+    , Show (AuxO ps)
+    , Show xs
+    , Show (XHiI xs)
+    , Show (XHiO xs)
+    )
 
-data UserSimAsync ps xs = UserSimAsync
-  { simWI         :: !(Maybe (SimXHiI ps xs) -> IO ())
-  , simRO         :: !(IO [SimXHiO ps xs])
-  , simCancel     :: !(IO ())
-  , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
-  }
+logAllNoUser :: GMsgO e l h -> Bool
+logAllNoUser = \case
+  MsgHi _ -> False
+  _       -> True
 
-defaultStdIO :: StdIO
-defaultStdIO = (hGetLineOrEOF stdin, putStrLn)
+logAllNoUserTicks :: GMsgO (SimAuxO ps) l h -> Bool
+logAllNoUserTicks = \case
+  MsgHi  _ -> False
+  MsgEnv (SimProcEvent (SimMsgRecv _ (MsgEnv _))) -> False
+  _        -> True
+
+grunSimIO
+  :: forall ps xs
+   . SimLog ps xs
+  => SimUserRe ps xs
+  => SimReRe Serialise ps xs
+  => (  ProcEnv Tick (SimFullState ps xs) IO
+     -> SimFullState ps xs
+     -> IO (SimFullState ps xs)
+     )
+  -> SimOptions
+  -> xs
+  -> (Pid -> IO ps)
+  -> Bool
+  -> SimUserIO ps xs
+  -> IO (Either (NonEmpty RTError) ())
+grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
+  runProcIO @(SimFullState ps xs) runReact
+                                  simRTOptions
+                                  mkNewState
+                                  getNow
+                                  logFilter
+                                  mkSimUserIO
+ where
+  SimOptions {..} = opt
+
+  mkNewState      = do
+    seed <- getEntropy @ScrubbedBytes 64
+    let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
+    states <- M.traverseWithKey (const . mkPState)
+      $ M.fromSet (const ()) initPids
+    pure $ SimFullState states
+                        (newSimState seed simInitLatency initPids)
+                        initXState
+
+  getNow fs = simNow (simState fs)
+
+  logFilter = case simLogging of
+    LogAll            -> Just $ const True
+    LogAllNoUser      -> Just $ logAllNoUser
+    LogAllNoUserTicks -> Just $ logAllNoUserTicks @ps
+    LogNone           -> Nothing
+  -- inject initial SimResetAddrs when starting out, otherwise we have no addresses
+
+  mkSimUserIO new = if not new
+    then pure (isInteractive, simUserIO)
+    else do
+      let (simUserI, simUserO) = simUserIO
+      injected <- newTVarIO False
+      let simUserI' = do
+            readTVarIO injected >>= \case
+              True  -> simUserI
+              False -> do
+                atomically $ writeTVar injected True
+                pure $ Just SimResetAddrs
+      pure (isInteractive, (simUserI', simUserO))
+
+runSimIO
+  :: forall p
+   . SimProcess p
+  => Ctx p IO
+  => SimLog (State p) ()
+  => SimUserRe (State p) ()
+  => SimReRe Serialise (State p) ()
+  => SimOptions
+  -> (Pid -> IO (State p))
+  -> Bool
+  -> SimUserIO (State p) ()
+  -> IO (Either (NonEmpty RTError) ())
+runSimIO opt =
+  let run = if simDbgEmptySimX opt then runSimXS @p @() else runSim @p
+  in  grunSimIO @(State p) run opt ()
+
+-- | Equivalent to @(IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())@.
+type SimUserIO ps xs = RTHiIO (SimFullState ps xs)
 
 defaultSimUserIO :: SimUserRe ps xs => StdIO -> SimUserIO ps xs
 defaultSimUserIO (getInput, doOutput) =
@@ -214,380 +201,45 @@ defaultSimUserIO (getInput, doOutput) =
         x                 -> doOutput $ show x
   in  (i, traverse_ o)
 
--- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO :: IO (UserSimIO ps xs, SimUserIO ps xs)
-tbQueueSimUserIO = do
-  qi <- newTBQueueIO 1
-  qo <- newTBQueueIO 1
-  let ri = atomically $ readTBQueue qi
-      ro = atomically $ readTBQueue qo
-      wi = atomically . writeTBQueue qi
-      wo = atomically . writeTBQueue qo
-  pure ((wi, ro), (ri, wo))
+{- | Convert a 'SimUserIO' to have auto-join and auto-quit behaviour.
 
--- | SimUserIO that reads/writes from TBQueues.
-tbQueueSimUserIO' :: IO (UserSimSTM ps xs, SimUserIO ps xs)
-tbQueueSimUserIO' = do
-  qi <- newTBQueueIO 1
-  qo <- newTBQueueIO 1
-  let ri = atomically $ readTBQueue qi
-      ro = readTBQueue qo
-      wi = writeTBQueue qi
-      wo = atomically . writeTBQueue qo
-  pure ((wi, ro), (ri, wo))
-
-{- | Combine a bunch of 'SimUserIO' together.
-
-The composed version will:
-
-  * read from any input, preserving relative order of inputs
-  * write to every output, in the same order as the given list
-
-EOF ('Nothing') on any input stream will be interpreted as EOF for the whole
-sim. An extra function is also returned, which the caller can use to close the
-input stream proactively in a graceful way: the sim will see an explicit EOF
-after consuming any outstanding unconsumed inputs.
+By design, processes are meant to be suspended at any time, and so they have no
+explicit awareness of, or any control over, when they are started or stopped.
+This slight hack adds support for auto-join/quit, by having the sim extension
+communicate this implicitly with the 'SimUserIO' that is driving it.
 -}
-combineSimUserIO :: [SimUserIO ps xs] -> IO (SimUserIO ps xs, IO ())
-combineSimUserIO ios = do
-  let (is, os) = unzip ios
-  (i, close) <- foreverInterleave is
-  let o x = for_ os ($ x)
-  pure ((join <$> i, o), close)
-
--- | Convert a 'runClocked' input to 'SimI' format, with 'Nothing' (EOF) lifted
--- to the top of the ADT structure.
-c2i :: Either Tick (Maybe x) -> Maybe (GMsgI Tick v x)
-c2i (Right Nothing ) = Nothing
-c2i (Left  t       ) = Just (MsgEnv t)
-c2i (Right (Just a)) = Just (MsgHi a)
-
-type SimLog ps xs
-  = ( Show ps
-    , Show (Addr ps)
-    , Show (PMsgI ps)
-    , Show (PMsgO ps)
-    , Show (HiO ps)
-    , Show (AuxO ps)
-    , Show xs
-    , Show (XHiI xs)
-    , Show (XHiO xs)
-    )
-
-defaultSimLog
-  :: SimLog ps xs
-  => (SimXO ps xs -> Bool)
-  -> String
-  -> Handle
-  -> Tick
-  -> SimXO ps xs
-  -> IO ()
-defaultSimLog f tFmt h t evt = when (f evt) $ do
-  tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
-  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
-
-logAllNoUser :: GMsgO e l h -> Bool
-logAllNoUser = \case
-  MsgHi _ -> False
-  _       -> True
-
-logAllNoUserTicks :: GMsgO (SimAuxO ps) l h -> Bool
-logAllNoUserTicks = \case
-  MsgHi  _ -> False
-  MsgEnv (SimProcEvent (SimMsgRecv _ (MsgEnv _))) -> False
-  _        -> True
-
-compareOMsg
-  :: (SimError -> IO ()) -> Tick -> Maybe LBS.ByteString -> Handle -> IO ()
-compareOMsg simError t mom h = case mom of
-  Nothing -> hIsEOF h >>= \case
-    True  -> pure ()
-    False -> err (LBS.pack "<not EOF>") (LBS.pack "<EOF>")
-  Just om -> hIsEOF h >>= \case
-    True  -> err (LBS.pack "<EOF>") om
-    False -> do
-      om' <- LBS.hGet h $ fromIntegral $ LBS.length om
-      when (om /= om') $ err om' om
-  where err x y = simError $ SimFailedReplayCompare "simOMsg" t x y
-
--- | Execution runtime for the simulation.
-data SimRT ps xs m = SimRT
-  { simClose  :: !(m ())
-  , simStatus :: !(m (Either (NonEmpty SimError) ()))
-  , simError  :: !(SimError -> m ())
-  , simRunI   :: !(m (Maybe (SimXI ps xs)))
-  , simRunO   :: !(Tick -> [SimXO ps xs] -> m ())
-  }
-
-defaultRT
+hookAutoJoinQuit
   :: forall ps xs
-   . SimLog ps xs
-  => SimUserRe ps xs
-  => SimReRe Serialise ps xs
-  => SimOptions
-  -> Tick
+   . Bool
+  -> Bool
+  -> XHiI xs
+  -> (XHiO xs -> Bool)
   -> SimUserIO ps xs
-  -> SimIAction Handle
-  -> SimOAction Handle
-  -> IO (SimRT ps xs IO)
-defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
-  let picosPerMs   = 1000000000
-      picosPerTick = simMsTick * picosPerMs
-
-      logFilter    = case simLogging of
-        LogAll            -> const True
-        LogAllNoUser      -> logAllNoUser
-        LogAllNoUserTicks -> logAllNoUserTicks @ps
-        LogNone           -> const False
-
-  simLog <- case simLogging of
-    LogNone -> pure (\_ _ -> pure ())
-    _ ->
-      mkHandle AppendMode simLogOutput
-        >$> defaultSimLog @ps @xs logFilter simLogTimeFmt
-
-  (simI, simIClose) <- case simIActRead simIMsg of
-    Nothing -> do
-      simClock    <- newClock initTick (interval picosPerTick Ps)
-      Clocked r f <- clockWithIO simClock simUserI
-      pure $ (r >$> c2i, f)
-    Just h -> do
-      s <- newLBStream h
-      let input = deserialiseOrEOF "simIMsg read" s
-      pure $ (input, pure ())
-
-  simErrors <- newTVarIO []
-  devnull   <- openBinaryFile systemEmptyFile AppendMode
-
-  let
-    simClose = simIClose >> hClose devnull
-    simError e = atomically $ modifyTVar' simErrors $ \ee -> (: ee) $! e
-    simStatus = readTVarIO simErrors >$> \case
-      [] -> Right ()
-      x  -> Left (fromList (reverse x))
-
-    simRunI = do
-      i <- simI
-      whenJust (simIActWrite simIMsg) $ \h -> do
-        whenJust i $ LBS.hPut h . serialise
-      LBS.hPut devnull $ serialise i -- force to avoid leaking thunks
-      pure i
-
-    ignoreAux :: GMsgO a l h -> Maybe (GMsgO Void l h)
-    ignoreAux = \case
-      MsgEnv _ -> Nothing
-      MsgLo  l -> Just $ MsgLo l
-      MsgHi  h -> Just $ MsgHi h
-
-    onlyUser = \case
-      MsgHi uo -> Just uo
-      _        -> Nothing
-
-    simRunO t outs = do
-      for_ outs $ simLog t
-
-      for_ (mapMaybe ignoreAux outs) $ \o -> do
-        let om = serialise (t, o)
-        whenJust (simOActWrite simOMsg) $ flip LBS.hPut om
-        whenJust (simOActCompare simOMsg) $ compareOMsg simError t (Just om)
-
-      -- send all the outs to simUserO in one batch
-      -- this allows it to perform flow control more pro-actively, since it now
-      -- receives a signal when 'reactM' outputs []
-      case simOActWrite simOMsg of
-        Nothing -> simUserO $ mapMaybe onlyUser outs
-        Just _  -> case simIActRead simIMsg of
-          Nothing -> simUserO $ mapMaybe onlyUser outs -- echo back
-          Just _  -> pure ()
-
-  pure SimRT { .. }
-  where SimOptions {..} = opt
-
-grunSimIO
-  :: forall p xs
-   . SimLog (State p) xs
-  => SimUserRe (State p) xs
-  => SimReRe Serialise (State p) xs
-  => (  ProcEnv Tick (SimFullState (State p) xs) IO
-     -> SimFullState (State p) xs
-     -> IO (SimFullState (State p) xs)
-     )
-  -> SimOptions
-  -> xs
-  -> (Pid -> IO (State p))
-  -> SimUserIO (State p) xs
-  -> IO (Either (NonEmpty SimError) ())
-grunSimIO lrunSim opt initXState mkPState simUserIO =
-  bracket (openIOAction simIOAction) closeIOAction $ \SimIOAction {..} -> do
-    --print opt
-    (new, ifs) <- case simIActRead simIState of
-      Nothing -> do
-        seed <- getEntropy @ScrubbedBytes 64
-        let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
-        states <- M.traverseWithKey (const . mkPState)
-          $ M.fromSet (const ()) initPids
-        pure
-          ( True
-          , SimFullState states
-                         (newSimState seed simInitLatency initPids)
-                         initXState
-          )
-      Just h -> do
-        rethrow (\e -> annotateIOError e "simIState" Nothing Nothing) $ do
-          r <- LBS.hGetContents h
-          pure (False, deserialiseNote "simIState read failed" r)
-    whenJust (simIActWrite simIState) $ flip LBS.hPut (serialise ifs)
-    LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
-
-    -- inject initial SimResetAddrs when starting out, otherwise we have no addresses
-    simUserIO' <- if not new
-      then pure simUserIO
-      else do
-        let (simUserI, simUserO) = simUserIO
-        injected <- newTVarIO False
-        let simUserI' = do
-              readTVarIO injected >>= \case
-                True  -> simUserI
-                False -> do
-                  atomically $ writeTVar injected True
-                  pure $ Just SimResetAddrs
-        pure (simUserI', simUserO)
-
-    {-
-    TODO: this is a hack that prevents ctrl-c from quitting the program in
-    interactive mode, similar to the behaviour of other REPLs. Without this, it
-    is possible for ctrl-c to quit the program if the user is quick and gives
-    the signal *in between* calls to libreadline [1], since we only ignore
-    Interrupt during those calls when it is interrupted.
-
-    However the way this is implemented is a bit shitty, as it prevents a user
-    from aborting an computation in interactive mode. (This is possible in
-    other REPLs). Not that this matters for a network simulator where things
-    are IO-bound not CPU-bound, but ideally we'd abort the current computation
-    and rewind the state back to the end of the previous computation. That's
-    hard since we support fake-pure impure 'Process' (we'd have to @suspend@
-    and @proceed@ in between every input, for all processes being simulated),
-    but would be easy if we only supported 'Proc'.
-
-    In non-interactive mode, nothing is changed and the user can abort whenever
-    they want, as expected. This exits the program so we don't need to worry
-    about restoring previous state, etc.
-
-    [1] With the new haskeline integration, this seems not to happen *in
-    practise* (you need to rm mask below to test it) although in theory it
-    should, perhaps the haskeline event loop is tighter than our old hacky
-    readline event loop... If we are convinced this will never be a problem, we
-    could drop the whole guard mechanism.
-    -}
-    let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
-        guard act = if isInteractiveMode opt
-          then mask $ \_ -> act id -- guard masks, unguard doesn't restore
-          else act id -- guard does nothing, no mask to restore
-
-    let realNow = simNow (simState ifs)
-        mkRT    = defaultRT @_ @xs opt realNow simUserIO' simIMsg simOMsg
-    bracket mkRT simClose $ \rt@SimRT {..} -> do
-      let env = ProcEnv guard simRunI simRunO
-      ofs <- lrunSim env ifs
-
-      let t = simNow (simState ofs)
-      whenJust (simOActCompare simOMsg) $ compareOMsg simError t Nothing
-
-      let os = serialise ofs
-      whenJust (simOActWrite simOState) $ flip LBS.hPut os
-      whenJust (simOActCompare simOState) $ \h -> do
-        rethrow (\e -> annotateIOError e "simOState" Nothing Nothing) $ do
-          os' <- LBS.hGetContents h
-          when (os /= os') $ do
-            simError $ SimFailedReplayCompare "simOState" t os' os
-
-      simStatus
-  where SimOptions {..} = opt
-
-runSimIO
-  :: forall p
-   . SimProcess p
-  => Ctx p IO
-  => SimLog (State p) ()
-  => SimUserRe (State p) ()
-  => SimReRe Serialise (State p) ()
-  => SimOptions
-  -> (Pid -> IO (State p))
-  -> SimUserIO (State p) ()
-  -> IO (Either (NonEmpty SimError) ())
-runSimIO opt =
-  let run = if simDbgEmptySimX opt then runSimXS @p @() else runSim @p
-  in  grunSimIO @p run opt ()
-
-handleSimResult :: Either (NonEmpty SimError) () -> IO ExitCode
-handleSimResult = \case
-  Right ()  -> pure ExitSuccess
-  Left  err -> do
-    hPutStrLn stderr $ "simulation gave errors: " <> show err
-    pure (ExitFailure 1)
-
-newSimAsync
-  :: forall p
-   . Maybe (SimXHiO (State p) () -> IO ())
-  -> (SimUserIO (State p) () -> IO (Either (NonEmpty SimError) ()))
-  -> IO (UserSimAsync (State p) ())
-newSimAsync maybeEat runSimIO' = do
-  ((simWI, simRO), simUserIO) <- tbQueueSimUserIO @(State p) @()
-  aMain                       <- async $ runSimIO' simUserIO
-  link aMain
-  simCancel <- case maybeEat of
-    Nothing  -> pure (cancel aMain)
-    Just eat -> do
-      aRead <- async $ forever $ simRO >>= traverse_ eat
-      link aRead
-      link2 aMain aRead
-      pure (cancel aMain >> cancel aRead)
-  let simWaitFinish = wait aMain
-  pure $ UserSimAsync { .. }
-
-convertSimData
-  :: forall ps xs xo
-   . Ord (Addr ps)
-  => SimReRe Serialise ps xs
-  => SimReRe Show ps xs
-  => SimReRe Read ps xs => SimConvOptions xo -> IO ()
-convertSimData opt = do
-  hi  <- mkHandle ReadMode simConvIFile
-  ho  <- mkHandle WriteMode simConvOFile
-  bs0 <- LBS.hGetContents hi
-  unless (LBS.null bs0) $ do
-    case someDecodeStream bs0 (allCodecs @(SimXI ps xs)) of
-      Right ((k, v), res) -> writeAll ho False k v res
-      Left erri -> case someDecodeStream bs0 (allCodecs @(SimXO' ps xs)) of
-        Right ((k, v), res) -> writeAll ho False k v res
-        Left erro ->
-          case someDecodeStream bs0 (allCodecs @(SimFullState ps xs)) of
-            Right ((k, v), res) -> writeAll ho True k v res
-            Left  errs          -> do
-              let errors =
-                    fmap ("imsg  (SimXI)       : " <>) erri
-                      <> fmap ("omsg  (SimXO)       : " <>) erro
-                      <> fmap ("state (SimFullState): " <>) errs
-              hPutStrLn stderr
-                $  "convertSimData: could not detect format, "
-                <> "perhaps try a different protocol and/or extension:\n"
-                <> intercalate "\n" errors
- where
-  SimConvOptions {..} = opt
-
-  writeAll
-    :: (Serialise a, Show a)
-    => Handle
-    -> Bool
-    -> CodecFormat
-    -> a
-    -> SomeResidue a
-    -> IO ()
-  writeAll ho p k v res = do
-    let showLn' = if p then pShowLn else showLn
-    let (enc, i, o) = case k of
-          CodecCbor -> (LBS.pack . showLn', CodecCbor, CodecRead)
-          CodecRead -> (serialise, CodecRead, CodecCbor)
-    hPutStrLn stderr $ "input  format: " <> show i
-    hPutStrLn stderr $ "output format: " <> show o
-    withDecodeStream "convertSimData decode" (LBS.hPut ho . enc) v res
+  -> IO (SimUserIO ps xs)
+hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do
+  if not autoJoin && not autoQuit
+    then pure (ui, uo)
+    else do
+      started  <- newTVarIO False
+      finished <- newTBQueueIO 1
+      let ui' = readTVarIO started >>= \case
+            False -> do
+              atomically $ writeTVar started True
+              pure (Just (SimExtensionI joinMsg))
+            -- note: race in this context is typically unsafe, but since we're
+            -- quitting the program on one of the branches it's ok here. see
+            -- https://github.com/simonmar/async/issues/113 for details.
+            -- we have a safe version in 'foreverInterleave' in p4p-common but
+            -- that carries additional overhead.
+            True -> do
+              fmap (either id id) $ race ui $ do
+                atomically (readTBQueue finished)
+                pure Nothing
+          isQuitMsg' = \case
+            SimExtensionO m | isQuitMsg m -> True
+            _                             -> False
+          uo' outs = do
+            uo outs
+            when (autoQuit && any isQuitMsg' outs) $ do
+              atomically $ writeTBQueue finished ()
+      pure (ui', uo')

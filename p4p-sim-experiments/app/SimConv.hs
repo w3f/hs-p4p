@@ -32,20 +32,20 @@ type SimXC' xs = (SimReReX Serialise xs, SimReReX Show xs, SimReReX Read xs)
 class SimXC' xs => SimXC xs
 instance SimXC' xs => SimXC xs
 
-runMain :: SimConvOptions (SimProto, SimExt) -> IO ExitCode
+runMain :: ConvOptions (SimProto, SimExt) -> IO ExitCode
 runMain opt = withSimProto @SimPC proto $ \(p :: SProt ps) -> do
   withSimExt @SimXC ext $ \(x :: SExt xs) -> do
-    convertSimData @ps @xs opt
+    convertProcData @(SimFullState ps xs) opt
     pure ExitSuccess
  where
-  SimConvOptions {..} = opt
-  (proto, ext)        = simConvXOpts
+  ConvOptions {..} = opt
+  (proto, ext)     = convXOpts
 
-simConvParseOptions :: Parser xo -> [String] -> IO (SimConvOptions xo)
+simConvParseOptions :: Parser xo -> [String] -> IO (ConvOptions xo)
 simConvParseOptions xopts = parseArgsIO'
   "sim-conv - a converter for p4p-sim data structures"
   "Read and write p4p-sim {input, output, state} in various formats."
-  (simConvOptions xopts)
+  (convOptions xopts)
 
 main :: IO ()
 main =

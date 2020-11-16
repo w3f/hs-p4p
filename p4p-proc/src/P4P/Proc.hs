@@ -7,6 +7,7 @@ module P4P.Proc
   , GMsgO
   , PMsgI
   , PMsgO
+  , PMsgO'
   , Proc(..)
   , Process(..)
   , ProcMsgI
@@ -15,6 +16,7 @@ module P4P.Proc
   , asState
   , ProcEnv(..)
   , reactEnv
+  , Tick
   -- protocol
   , Observation(..)
   , Observations
@@ -31,6 +33,7 @@ module P4P.Proc
   )
 where
 
+import           Data.Schedule      (Tick)
 import           P4P.Proc.Instances
 import           P4P.Proc.Internal
 import           P4P.Proc.Protocol

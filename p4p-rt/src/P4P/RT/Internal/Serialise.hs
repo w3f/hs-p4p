@@ -5,7 +5,7 @@
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module P4P.Sim.Serialise where
+module P4P.RT.Internal.Serialise where
 
 -- external
 import qualified Codec.CBOR.Read                 as CBOR.Read

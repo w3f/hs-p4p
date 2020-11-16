@@ -104,6 +104,7 @@ type GMsgO e l h = GMsg 'Outgoing e l h
 
 type PMsgI ps = GMsgI (EnvI ps) (LoI ps) (HiI ps)
 type PMsgO ps = GMsgO (AuxO ps) (LoO ps) (HiO ps)
+type PMsgO' ps = GMsgO Void (LoO ps) (HiO ps)
 
 {- | Pure communicating process.
 
