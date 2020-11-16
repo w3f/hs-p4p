@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
+{-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE DefaultSignatures     #-}
 {-# LANGUAGE DeriveAnyClass        #-}
 {-# LANGUAGE DeriveFunctor         #-}
@@ -30,8 +31,8 @@ import           Data.Set              (Set)
 import           Data.Void             (Void, absurd)
 import           Data.Word             (Word16)
 import           GHC.Generics          (Generic)
-import           P4P.Proc              (GMsg (..), GMsgI, GMsgO, PAddr,
-                                        Protocol (..), RuntimeI, RuntimeO)
+import           P4P.Proc              (GMsgI, GMsgO, PMsgI, PMsgI, PMsgO,
+                                        ProcIface (..), UProtocol (..))
 
 -- internal
 import           P4P.Sim.Numeric
@@ -60,7 +61,7 @@ data SimState' i a = SimState
   }
   deriving (Eq, Show, Read, Generic, Binary, Serialise)
 makeLenses_ ''SimState'
-type SimState ps = SimState' (GMsgI ps) (PAddr ps)
+type SimState ps = SimState' (PMsgI ps) (Addr ps)
 
 newSimState
   :: (ByteArrayAccess seed, Ord a)
@@ -79,7 +80,7 @@ data SimFullState ps xs = SimFullState
   }
   deriving (Generic, Functor)
 -- note: we are forced to do this (instead of having 'SimFullState' ps i a xs'
--- like how 'SimState'' is defined) so that we can define @instance Protocol@
+-- like how 'SimState'' is defined) so that we can define @instance ProcIface@
 -- in a convenient way - because we can't apply type families in the instance
 -- declaration.
 deriving instance (Eq (Map Pid ps), Eq (SimState ps), Eq xs)
@@ -104,7 +105,7 @@ data SimProcEvt' i o a =
   | SimNoSuchAddr !Pid !a
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 makePrisms ''SimProcEvt'
-type SimProcEvt ps = SimProcEvt' (GMsgI ps) (GMsgO ps) (PAddr ps)
+type SimProcEvt ps = SimProcEvt' (PMsgI ps) (PMsgO ps) (Addr ps)
 
 -- | All state relating to a process in the simulation.
 --
@@ -118,8 +119,9 @@ data SimProcState ps i a = SimProcState
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 -- | User input into the sim. TODO: will be extended with debugging commands.
-data SimUserI' ps ui i a xi =
-    SimProcUserI !Pid !ui
+data SimHiI' ps ui i a xi =
+    SimProcHiI !Pid !ui
+  | SimResetAddrs
   | SimGetAllPids
   | SimGetAllInboxSizes
   | SimGetTickNow
@@ -130,13 +132,12 @@ data SimUserI' ps ui i a xi =
   | SimExtensionI !xi
     -- ^ extension input type
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise, Functor)
-type SimXUserI ps xs
-  = SimUserI' ps (UserI ps) (GMsgI ps) (PAddr ps) (XUserI xs)
-type SimUserI ps = SimXUserI ps ()
+type SimXHiI ps xs = SimHiI' ps (HiI ps) (PMsgI ps) (Addr ps) (XHiI xs)
+type SimHiI ps = SimXHiI ps ()
 
 -- | User output from the sim. TODO: will be extended with debugging output.
-data SimUserO' ps uo i a xo =
-    SimProcUserO !Pid !uo
+data SimHiO' ps uo i a xo =
+    SimProcHiO !Pid !uo
   | SimAllPids !(Set Pid)
   | SimAllInboxSizes !(Map Pid Int)
   | SimTickNow !Tick
@@ -147,15 +148,14 @@ data SimUserO' ps uo i a xo =
   | SimExtensionO !xo
     -- ^ extension output type
  deriving (Eq, Show, Read, Generic, Binary, Serialise, Functor)
-type SimXUserO ps xs
-  = SimUserO' ps (UserO ps) (GMsgI ps) (PAddr ps) (XUserO xs)
-type SimUserO ps = SimXUserO ps ()
+type SimXHiO ps xs = SimHiO' ps (HiO ps) (PMsgI ps) (Addr ps) (XHiO xs)
+type SimHiO ps = SimXHiO ps ()
 
 data SimAuxO' ao i o a =
     SimUserAuxO !Pid !ao
   | SimProcEvent !(SimProcEvt' i o a)
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
-type SimAuxO ps = SimAuxO' (AuxO ps) (GMsgI ps) (GMsgO ps) (PAddr ps)
+type SimAuxO ps = SimAuxO' (AuxO ps) (PMsgI ps) (PMsgO ps) (Addr ps)
 
 data SimError = SimFailedReplayCompare
   { simFailedReplayCompareType     :: !String
@@ -166,49 +166,46 @@ data SimError = SimFailedReplayCompare
     -- ^ Failed to compare replay at the given tick.
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-class (
-  PMsg xs ~ Void,
-  AuxO xs ~ Void,
-  Protocol xs
- ) => SimXProtocol ps xs where
-  type XUserI xs
-  type XUserO xs
+class (ProcIface xs, AuxO xs ~ Void) => SimXProcIface ps xs where
+  type XHiI xs
+  type XHiO xs
 
-  toUserI :: Either (SimUserO ps) (XUserI xs) -> Maybe (UserI xs)
-  default toUserI
-    :: (UserI xs ~ Either (SimUserO ps) (XUserI xs))
-    => Either (SimUserO ps) (XUserI xs) -> Maybe (UserI xs)
-  toUserI = Just
+  toHiI :: Either (SimHiO ps) (XHiI xs) -> Maybe (HiI xs)
+  default toHiI
+    :: (HiI xs ~ Either (SimHiO ps) (XHiI xs))
+    => Either (SimHiO ps) (XHiI xs) -> Maybe (HiI xs)
+  toHiI = Just
 
-  fromUserO :: UserO xs -> Either (SimUserI ps) (XUserO xs)
-  default fromUserO
-    :: (UserO xs ~ Either (SimUserI ps) (XUserO xs))
-    => UserO xs -> Either (SimUserI ps) (XUserO xs)
-  fromUserO = id
+  fromHiO :: HiO xs -> Either (SimHiI ps) (XHiO xs)
+  default fromHiO
+    :: (HiO xs ~ Either (SimHiI ps) (XHiO xs))
+    => HiO xs -> Either (SimHiI ps) (XHiO xs)
+  fromHiO = id
 
-instance SimXProtocol ps () where
-  type XUserI () = Void
-  type XUserO () = Void
-  toUserI   = const Nothing
-  fromUserO = absurd
+instance SimXProcIface ps () where
+  type XHiI () = Void
+  type XHiO () = Void
+  toHiI   = const Nothing
+  fromHiO = absurd
 
--- these splices need to go after the class definition of SimXProtocol since it
+-- these splices need to go after the class definition of SimXProcIface since it
 -- is cyclicly dependent with these data structures
-makePrisms ''SimUserI'
-makePrisms ''SimUserO'
+makePrisms ''SimHiI'
+makePrisms ''SimHiO'
 makePrisms ''SimAuxO'
 
-instance SimXProtocol ps xs => Protocol (SimFullState ps xs) where
-  type PMsg (SimFullState ps xs) = Void
-  type UserI (SimFullState ps xs) = SimXUserI ps xs
-  type UserO (SimFullState ps xs) = SimXUserO ps xs
+instance SimXProcIface ps xs => ProcIface (SimFullState ps xs) where
+  type LoI (SimFullState ps xs) = Void
+  type LoO (SimFullState ps xs) = Void
+  type HiI (SimFullState ps xs) = SimXHiI ps xs
+  type HiO (SimFullState ps xs) = SimXHiO ps xs
   type AuxO (SimFullState ps xs) = SimAuxO ps
 
 -- | Input into the sim.
-type SimI ps = GMsg (RuntimeI ()) (SimUserI ps) Void Void
-type SimXI ps xs = GMsg (RuntimeI ()) (SimXUserI ps xs) Void Void
+type SimI ps = GMsgI Tick Void (SimHiI ps)
+type SimXI ps xs = GMsgI Tick Void (SimXHiI ps xs)
 
 -- | Output from the sim.
-type SimO ps = GMsg (RuntimeO Void) (SimUserO ps) Void (SimAuxO ps)
-type SimXO ps xs = GMsg (RuntimeO Void) (SimXUserO ps xs) Void (SimAuxO ps)
-type SimXO' ps xs = GMsg (RuntimeO Void) (SimXUserO ps xs) Void Void
+type SimO ps = GMsgO (SimAuxO ps) Void (SimHiO ps)
+type SimXO ps xs = GMsgO (SimAuxO ps) Void (SimXHiO ps xs)
+type SimXO' ps xs = GMsgO Void Void (SimXHiO ps xs)

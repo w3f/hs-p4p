@@ -80,27 +80,29 @@ ireqEnsure
   :: Lens' s (SC.Schedule KTask)
   -> Lens' s (BM.BMap2 NodeId RequestBody IReqProcess)
   -> SC.TickDelta
+  -> NodeAddr
   -> Msg
   -> (s -> (ReplyBody, s))
   -> s
   -> ([KadO], s)
-ireqEnsure lsched lireq timeout req mkRepBody = runState $ do
+ireqEnsure lsched lireq timeout srcAddr req mkRepBody = runState $ do
   now <- SC.tickNow <$> use lsched
   lireq . at_ (reqSrc, reqBody) %%=! \case
     Present ireqProc -> do
       -- duplicate IRequest
       -- TODO(retry): perhaps try sending to other addresses in nInfo too
       let repBody = ireqReply ireqProc
-          reply   = replyForRequest req (Right repBody) now addr
+          reply   = replyForRequest srcAddr req (Right repBody) now
       pure ([reply, kLog $ I_KProcessIgnoreDup kproc], Present ireqProc)
     Absent False -> do
       -- not enough space left in map, rate-limit them
-      let reply = replyForRequest req (Left $ TryAgainLater timeout) now addr
+      let reply =
+            replyForRequest srcAddr req (Left $ TryAgainLater timeout) now
       pure ([reply], Absent False)
     Absent True -> do
       -- new IRequest
       repBody <- state mkRepBody
-      let reply = replyForRequest req (Right repBody) now addr
+      let reply = replyForRequest srcAddr req (Right repBody) now
       lt <- lsched %%= SC.after timeout (TOIReq reqSrc reqBody)
       let ireqProc = IReqProcess { ireqMsg     = req
                                  , ireqTimeout = lt
@@ -109,7 +111,6 @@ ireqEnsure lsched lireq timeout req mkRepBody = runState $ do
       pure ([reply, kLog $ I_KProcessNew kproc], Present ireqProc)
  where
   (reqSrc, reqBody) = fst $ ireqIndex req
-  addr              = srcAddr req
   kproc             = KPIReq reqSrc reqBody
 
 -- | Finish an existing 'IReqProcess', after the timeout is complete.
@@ -188,7 +189,7 @@ oreqEnsure
   -> Lens' s (BM.BMap2 NodeId RequestBody OReqProcess)
   -> Lens' s (M.Map ReqId (Z.Pair NodeId RequestBody))
   -> (SC.TickDelta, SC.TickDelta)
-  -> (SC.Tick -> Request -> Msg)
+  -> (SC.Tick -> Request -> (NodeAddr, Msg))
   -> NodeId
   -> RequestBody
   -> s
@@ -204,7 +205,7 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
     Absent True -> do
       reqId <- ldrg %%= newReqId reqIdWith
       now   <- SC.tickNow <$> use lsched
-      let request = mkMsg now $ Request reqId reqBody
+      let (dstAddr, request) = mkMsg now $ Request reqId reqBody
       lt  <- lsched %%= SC.after timeout (TOOReq reqDst reqBody)
       lt' <- lsched %%= SC.after timeoutRetry (TOOReqReply reqDst reqBody)
       let oreqProc = OReqProcess { oreqMsg     = request
@@ -213,7 +214,10 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
                                  , oreqFuture  = F.SFWaiting mempty
                                  }
       loreqId . at reqId .= Just (reqDst Z.:!: reqBody)
-      pure ([P.MsgProc request, kLog $ I_KProcessNew kproc], Present oreqProc)
+      pure
+        ( [P.MsgLo (P.UData dstAddr request), kLog $ I_KProcessNew kproc]
+        , Present oreqProc
+        )
  where
   (timeout, timeoutRetry) = par
   kproc                   = KPOReq reqDst reqBody

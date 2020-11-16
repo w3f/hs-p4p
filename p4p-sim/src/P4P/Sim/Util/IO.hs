@@ -106,8 +106,8 @@ hookAutoJoinQuit
   :: forall ps xs
    . Bool
   -> Bool
-  -> XUserI xs
-  -> (XUserO xs -> Bool)
+  -> XHiI xs
+  -> (XHiO xs -> Bool)
   -> SimUserIO ps xs
   -> IO (SimUserIO ps xs)
 hookAutoJoinQuit autoJoin autoQuit joinMsg isQuitMsg (ui, uo) = do

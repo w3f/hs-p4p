@@ -13,14 +13,16 @@
 module P4P.Sim.Extension where
 
 -- external
+import           Control.Lens.Mutable             (Allocable)
 import           Control.Lens.Mutable.Extra       (Const (..), FakeAlloc2 (..),
                                                    SNat, newFakeAlloc2)
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import           Data.Functor                     (($>))
-import           Data.Void                        (absurd)
+import           Data.Schedule                    (Tick)
+import           Data.Void                        (Void, absurd)
 import           P4P.Proc                         (PRef, Proc (..),
-                                                   ProcEnv (..), Process (..),
-                                                   Protocol (..))
+                                                   ProcEnv (..), ProcIface (..),
+                                                   Process (..))
 import           P4P.Proc.Util                    (Can (..), knot2UReactM)
 
 -- internal
@@ -29,7 +31,9 @@ import           P4P.Sim.Types
 
 
 data PSimX ref st p x = PSimX !(PSim ref st p) !x
-type SimXProcess p x = (Process x, SimXProtocol (State p) (State x))
+type SimXProc xs = (EnvI xs ~ Tick, LoI xs ~ Void, LoO xs ~ Void)
+type SimXProcess p x
+  = (Process x, SimXProcIface (State p) (State x), SimXProc (State x))
 
 instance (
   Process (PSim ref st p),
@@ -43,18 +47,13 @@ instance (
 
   suspend (PSimX s x) = ($>) <$> suspend s <*> suspend x
 
-  getAddrsM _ = pure []
-
-  localNowM (PSimX s x) = localNowM s
-
   reactM (PSimX s x) =
-    knot2UReactM @_ @_ @(SimUserI (State p)) @(SimUserO (State p))
-      @(UserI (State x))
-      @(UserI (State x))
-      @(XUserO (State x))
-      @(SimUserI (State p))
-      @(SimXUserI (State p) (State x))
-      @(SimXUserO (State p) (State x))
+    knot2UReactM @_ @_ @(SimHiI (State p)) @(SimHiO (State p)) @(HiI (State x))
+      @(HiI (State x))
+      @(XHiO (State x))
+      @(SimHiI (State p))
+      @(SimXHiI (State p) (State x))
+      @(SimXHiO (State p) (State x))
       selInU
       mkI1U
       mkI2U
@@ -69,20 +68,25 @@ instance (
    where
     selInU = \case
       SimExtensionI xi ->
-        maybe Non Eno $ toUserI @(State p) @(State x) (Right xi)
+        maybe Non Eno $ toHiI @(State p) @(State x) (Right xi)
       i -> One (i $> error "unreachable, fmap into Void")
     mkI1U = either id id
     mkI2U = either id id
-    selO1U o = case toUserI @_ @(State x) (Left o) of
+    selO1U o = case toHiI @_ @(State x) (Left o) of
       Just xsi -> Two o xsi
       Nothing  -> One o
-    selO2U xso = case fromUserO @_ @(State x) xso of
+    selO2U xso = case fromHiO @_ @(State x) xso of
       Left  i -> Eno i
       Right o -> One o
     mkOutU = \case
       Left  o  -> absurd <$> o
       Right xo -> SimExtensionO xo
     watchRun _ _ = pure () -- TODO: for now, don't try to detect loops
+
+simXNowM
+  :: Allocable st (SimRunState p) ref
+  => Ctx (PSimX ref st p x) m => PSimX ref st p x -> m Tick
+simXNowM (PSimX s x) = simNowM s
 
 -- | Run a sim with an extension 'Process'.
 runSimX
@@ -92,7 +96,7 @@ runSimX
   => Monad m
   => SimXProcess p x
   => Ctx x (StateT (FakeAlloc2 (SimRunState p) xs_) m)
-  => ProcEnv (SimFullState (State p) (State x)) m
+  => ProcEnv Tick (SimFullState (State p) (State x)) m
   -> SimFullState (State p) (State x)
   -> m (SimFullState (State p) (State x))
 {- API note:
@@ -123,6 +127,7 @@ However it only works on extension processes implemented as a pure Proc.
 -}
 runSimX env s0 =
   simulate @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
+      simXNowM
       (liftEnv env)
       s0
     `evalStateT` newFakeAlloc2
@@ -133,9 +138,10 @@ runSimXS
    . SimProcess p
   => Ctx p m
   => Monad m
-  => SimXProtocol (State p) xs
+  => SimXProcIface (State p) xs
+  => SimXProc xs
   => Proc xs
-  => ProcEnv (SimFullState (State p) xs) m
+  => ProcEnv Tick (SimFullState (State p) xs) m
   -> SimFullState (State p) xs
   -> m (SimFullState (State p) xs)
 runSimXS =

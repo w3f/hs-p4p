@@ -437,6 +437,9 @@ kBucketModifyAtNode refNode f s0 = case kBucketGetIndex refNode s0 of
 ownNodeInfo :: State drg -> NodeInfo NodeAddr
 ownNodeInfo State {..} = nodeInfoOf kOwnInfo
 
+ownNodeAddrs :: State drg -> KSeq (Z.Pair (Z.Either SC.Tick SC.Tick) NodeAddr)
+ownNodeAddrs State {..} = niNodeAddr $ getNodeInfo kOwnInfo
+
 kSelf :: State drg -> NodeId
 kSelf = niNodeId . ownNodeInfo
 

@@ -14,7 +14,6 @@ where
 -- external
 import qualified Data.Sequence                    as Seq
 
---import Data.Void (Void)
 import           Control.Applicative              (liftA2)
 import           Control.Lens                     ((%%=), (%=), (^.), _1, _2,
                                                    _3)
@@ -26,6 +25,7 @@ import           Data.Can                         (Can (..))
 import           Data.Foldable                    (toList, traverse_)
 import           Data.Sequence                    (Seq (..), (|>))
 import           Data.Traversable                 (for)
+import           Data.Void                        (Void)
 
 -- internal
 import           P4P.Proc
@@ -139,35 +139,38 @@ knot2ReactM selIn mkI1 mkI2 selO1 selO2 mkOut watchRun run1 run2 p1 p2 input =
 
 {- | Knot 2 processes - react to a combined input giving combined outputs.
 
-Like 'knot2ReactM' except it only affects the 'MsgUser' parts of the messages.
+Like 'knot2ReactM' except it only affects the 'MsgHi' parts of the messages.
 
 The process-to-process message type is assumed to be 'Void', i.e. the combined
 process is a local-only process.
 
 The auxiliary message output type is assumed to be 'Void' for process 2.
+
+The @EnvI@, @LoI@ and @LoO@ types must be the same for both processes.
 -}
 -- brittany-disable-next-binding
 -- https://github.com/lspitzner/brittany/issues/299
 knot2UReactM
   :: forall p1 p2 i1 o1 o1i2 i2 o2 o2i1 ui uo m1 m2 m
    . Process p1
-  => PMsg (State p1) ~ Void
   => Process p2
-  => PMsg (State p2) ~ Void
   => AuxO (State p2) ~ Void
+  => LoI (State p1) ~ LoI (State p2)
+  => LoO (State p1) ~ LoO (State p2)
+  => EnvI (State p1) ~ EnvI (State p2)
   => Ctx p1 m1
   => Ctx p2 m2
   => Monad m
   => (ui -> Can i1 i2)
   -- ^ Selects which process should receive the overall input.
   -- If both are selected, then WLOG p1 is run first.
-  -> (Either o2i1 i1 -> UserI (State p1))
+  -> (Either o2i1 i1 -> HiI (State p1))
   -- ^ Creates the input to p1, from i1 and o2i1
-  -> (Either o1i2 i2 -> UserI (State p2))
+  -> (Either o1i2 i2 -> HiI (State p2))
   -- ^ Creates the input to p2, from i2 and o1i2
-  -> (UserO (State p1) -> Can o1 o1i2)
+  -> (HiO (State p1) -> Can o1 o1i2)
   -- ^ Selects where the output from p1 should be sent
-  -> (UserO (State p2) -> Can o2 o2i1)
+  -> (HiO (State p2) -> Can o2 o2i1)
   -- ^ Selects where the output from p2 should be sent
   -> (Either o1 o2 -> uo)
   -- ^ Creates the overall output
@@ -176,14 +179,14 @@ knot2UReactM
   -> (forall a . m2 a -> m a)
   -> p1
   -> p2
-  -> GMsg (RuntimeI ()) ui Void Void
-  -> m [GMsg (RuntimeO Void) uo Void (AuxO (State p1))]
+  -> GMsgI (EnvI (State p1)) (LoI (State p1)) ui
+  -> m [GMsgO (AuxO (State p1)) (LoO (State p1)) uo]
 knot2UReactM selInU mkI1U mkI2U selO1U selO2U mkOutU =
-  knot2ReactM @_ @_ @(GMsg (RuntimeI ()) i1 Void Void)
-    @(GMsg (RuntimeO Void) o1 Void (AuxO (State p1)))
+  knot2ReactM @_ @_ @(GMsgI (EnvI (State p1)) (LoI (State p1)) i1)
+    @(GMsgO (AuxO (State p1)) (LoO (State p1)) o1)
     @o1i2
-    @(GMsg (RuntimeI ()) i2 Void Void)
-    @(GMsg (RuntimeO Void) o2 Void Void)
+    @(GMsgI (EnvI (State p1)) (LoI (State p1)) i2)
+    @(GMsgO Void (LoO (State p1)) o2)
     @o2i1
     selIn
     mkI1
@@ -193,26 +196,29 @@ knot2UReactM selInU mkI1U mkI2U selO1U selO2U mkOutU =
     mkOut
  where
   selIn = \case
-    MsgRT   r -> Two (MsgRT r) (MsgRT r)
-    MsgUser u -> bimap MsgUser MsgUser (selInU u)
+    MsgEnv  e -> Two (MsgEnv e) (MsgEnv e)
+    MsgLo l -> Two (MsgLo l) (MsgLo l)
+    MsgHi u -> bimap MsgHi MsgHi (selInU u)
   mkI1 = \case
-    Left  o2i1         -> MsgUser (mkI1U (Left o2i1))
-    Right (MsgRT   r ) -> MsgRT r
-    Right (MsgUser o2) -> MsgUser (mkI1U (Right o2))
+    Left  o2i1         -> MsgHi (mkI1U (Left o2i1))
+    Right (MsgEnv e) -> MsgEnv e
+    Right (MsgLo l) -> MsgLo l
+    Right (MsgHi o2) -> MsgHi (mkI1U (Right o2))
   mkI2 = \case
-    Left  o1i2         -> MsgUser (mkI2U (Left o1i2))
-    Right (MsgRT   r ) -> MsgRT r
-    Right (MsgUser o1) -> MsgUser (mkI2U (Right o1))
+    Left  o1i2         -> MsgHi (mkI2U (Left o1i2))
+    Right (MsgEnv  e) -> MsgEnv e
+    Right (MsgLo l) -> MsgLo l
+    Right (MsgHi o1) -> MsgHi (mkI2U (Right o1))
   selO1 = \case
-    MsgRT   r -> One (MsgRT r)
-    MsgUser u -> first MsgUser (selO1U u)
-    MsgAux  a -> One (MsgAux a)
+    MsgEnv e -> One (MsgEnv e)
+    MsgLo l -> One (MsgLo l)
+    MsgHi u -> first MsgHi (selO1U u)
   selO2 = \case
-    MsgRT   r -> One (MsgRT r)
-    MsgUser u -> first MsgUser (selO2U u)
+    MsgLo l -> One (MsgLo l)
+    MsgHi u -> first MsgHi (selO2U u)
   mkOut = \case
-    Left  (MsgRT   r) -> MsgRT r
-    Left  (MsgUser u) -> MsgUser (mkOutU (Left u))
-    Left  (MsgAux  a) -> MsgAux a
-    Right (MsgRT   r) -> MsgRT r
-    Right (MsgUser u) -> MsgUser (mkOutU (Right u))
+    Left (MsgEnv e) -> MsgEnv e
+    Left (MsgLo l) -> MsgLo l
+    Left  (MsgHi u) -> MsgHi (mkOutU (Left u))
+    Right (MsgLo l) -> MsgLo l
+    Right (MsgHi u) -> MsgHi (mkOutU (Right u))

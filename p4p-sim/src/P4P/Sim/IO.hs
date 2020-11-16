@@ -30,10 +30,11 @@ import           Data.List.NonEmpty             (NonEmpty, fromList)
 import           Data.Maybe                     (mapMaybe)
 import           Data.Schedule                  (Tick)
 import           Data.Traversable               (for)
-import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PAddr,
-                                                 ProcEnv (..), Process (..),
-                                                 Protocol (..), RuntimeI (..),
-                                                 Void)
+import           Data.Void                      (Void)
+import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
+                                                 PMsgO, ProcEnv (..),
+                                                 ProcIface (..), Process (..),
+                                                 UProtocol (..))
 import           Text.Read                      (readEither)
 
 -- external, IO
@@ -46,7 +47,7 @@ import           Control.Concurrent.STM         (STM, atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
 import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
-                                                 readTVarIO)
+                                                 readTVarIO, writeTVar)
 import           Crypto.Random.Entropy          (getEntropy)
 import           Crypto.Random.Extra            (ScrubbedBytes)
 import           Data.Time                      (defaultTimeLocale, formatTime,
@@ -145,43 +146,48 @@ closeIOAction = void . traverse hClose
 type SimUserRe ps xs
   = ( Show ps
     , Read ps
-    , Read (UserI ps)
-    , Show (UserO ps)
-    , Show (UserI ps) -- as part of UserO we can dump the state, which contains UserI messages
-    , Show (PAddr ps)
-    , Read (PAddr ps)
-    , Ord (PAddr ps)
-    , Show (PMsg ps)
-    , Read (PMsg ps)
-    , Read (XUserI xs)
-    , Show (XUserO xs)
+    , Show (EnvI ps)
+    , Read (EnvI ps)
+    , Read (LoI ps)
+    , Read (HiI ps)
+    , Show (HiO ps)
+    , Show (LoI ps)     -- as part of HiO we can dump the state, which contains LoI messages
+    , Show (HiI ps)     -- as part of HiO we can dump the state, which contains HiI messages
+    , Show (Addr ps)
+    , Read (Addr ps)
+    , Ord (Addr ps)
+    , Show (Msg ps)
+    , Read (Msg ps)
+    , Read (XHiI xs)
+    , Show (XHiO xs)
     )
 
 type SimReReP (codec :: Type -> Constraint) ps
   = ( codec ps
-    , codec (UserI ps)
-    , codec (UserO ps)
-    , codec (PAddr ps)
-    , codec (PMsg ps)
+    , codec (EnvI ps)
+    , codec (LoI ps)
+    , codec (LoO ps)
+    , codec (HiI ps)
+    , codec (HiO ps)
+    , codec (Addr ps)
+    , codec (Msg ps)
     )
 
 type SimReReX (codec :: Type -> Constraint) xs
-  = (codec xs, codec (XUserI xs), codec (XUserO xs))
+  = (codec xs, codec (XHiI xs), codec (XHiO xs))
 
 -- | Convenience type alias for being able to record and replay a simulation.
 type SimReRe (codec :: Type -> Constraint) ps xs
   = (SimReReP codec ps, SimReReX codec xs)
 
-type SimUserIO ps xs
-  = (IO (Maybe (SimXUserI ps xs)), [SimXUserO ps xs] -> IO ())
-type UserSimIO ps xs = (Maybe (SimXUserI ps xs) -> IO (), IO [SimXUserO ps xs])
-type UserSimSTM ps xs
-  = (Maybe (SimXUserI ps xs) -> STM (), STM [SimXUserO ps xs])
+type SimUserIO ps xs = (IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())
+type UserSimIO ps xs = (Maybe (SimXHiI ps xs) -> IO (), IO [SimXHiO ps xs])
+type UserSimSTM ps xs = (Maybe (SimXHiI ps xs) -> STM (), STM [SimXHiO ps xs])
 type StdIO = (IO (Maybe String), String -> IO ())
 
 data UserSimAsync ps xs = UserSimAsync
-  { simWI         :: !(Maybe (SimXUserI ps xs) -> IO ())
-  , simRO         :: !(IO [SimXUserO ps xs])
+  { simWI         :: !(Maybe (SimXHiI ps xs) -> IO ())
+  , simRO         :: !(IO [SimXHiO ps xs])
   , simCancel     :: !(IO ())
   , simWaitFinish :: !(IO (Either (NonEmpty SimError) ()))
   }
@@ -197,15 +203,15 @@ defaultSimUserIO (getInput, doOutput) =
         Just s  -> if null s
           then pure Nothing
           else case readEither s of
-            Right (pid :~ ui) -> pure (Just (Just (SimProcUserI pid ui)))
+            Right (pid :~ ui) -> pure (Just (Just (SimProcHiI pid ui)))
             Left  _           -> case readEither s of
               Right r -> pure (Just (Just r))
               Left  e -> doOutput e >> pure Nothing
                 -- TODO: add some help text, ideally with some introspection
                 -- that prints out some generated concrete examples
       o = \case
-        SimProcUserO pid uo -> doOutput $ show $ pid :~ uo
-        x                   -> doOutput $ show x
+        SimProcHiO pid uo -> doOutput $ show $ pid :~ uo
+        x                 -> doOutput $ show x
   in  (i, traverse_ o)
 
 -- | SimUserIO that reads/writes from TBQueues.
@@ -251,21 +257,21 @@ combineSimUserIO ios = do
 
 -- | Convert a 'runClocked' input to 'SimI' format, with 'Nothing' (EOF) lifted
 -- to the top of the ADT structure.
-c2i :: Either Tick (Maybe x) -> Maybe (GMsg (RuntimeI ()) x v a)
+c2i :: Either Tick (Maybe x) -> Maybe (GMsgI Tick v x)
 c2i (Right Nothing ) = Nothing
-c2i (Left  t       ) = Just (MsgRT (RTTick t ()))
-c2i (Right (Just a)) = Just (MsgUser a)
+c2i (Left  t       ) = Just (MsgEnv t)
+c2i (Right (Just a)) = Just (MsgHi a)
 
 type SimLog ps xs
   = ( Show ps
-    , Show (PAddr ps)
-    , Show (GMsgI ps)
-    , Show (GMsgO ps)
-    , Show (UserO ps)
+    , Show (Addr ps)
+    , Show (PMsgI ps)
+    , Show (PMsgO ps)
+    , Show (HiO ps)
     , Show (AuxO ps)
     , Show xs
-    , Show (XUserI xs)
-    , Show (XUserO xs)
+    , Show (XHiI xs)
+    , Show (XHiO xs)
     )
 
 defaultSimLog
@@ -280,16 +286,16 @@ defaultSimLog f tFmt h t evt = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
   hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
 
-logAllNoUser :: GMsg r u p a -> Bool
+logAllNoUser :: GMsgO e l h -> Bool
 logAllNoUser = \case
-  MsgUser _ -> False
-  _         -> True
+  MsgHi _ -> False
+  _       -> True
 
-logAllNoUserTicks :: GMsg r u p (SimAuxO ps) -> Bool
+logAllNoUserTicks :: GMsgO (SimAuxO ps) l h -> Bool
 logAllNoUserTicks = \case
-  MsgUser _ -> False
-  MsgAux (SimProcEvent (SimMsgRecv _ (MsgRT (RTTick _ _)))) -> False
-  _         -> True
+  MsgHi  _ -> False
+  MsgEnv (SimProcEvent (SimMsgRecv _ (MsgEnv _))) -> False
+  _        -> True
 
 compareOMsg
   :: (SimError -> IO ()) -> Tick -> Maybe LBS.ByteString -> Handle -> IO ()
@@ -331,7 +337,7 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       logFilter    = case simLogging of
         LogAll            -> const True
         LogAllNoUser      -> logAllNoUser
-        LogAllNoUserTicks -> logAllNoUserTicks @_ @_ @_ @ps
+        LogAllNoUserTicks -> logAllNoUserTicks @ps
         LogNone           -> const False
 
   simLog <- case simLogging of
@@ -367,16 +373,15 @@ defaultRT opt initTick (simUserI, simUserO) simIMsg simOMsg = do
       LBS.hPut devnull $ serialise i -- force to avoid leaking thunks
       pure i
 
-    ignoreAux :: GMsg r u p a -> Maybe (GMsg r u p Void)
+    ignoreAux :: GMsgO a l h -> Maybe (GMsgO Void l h)
     ignoreAux = \case
-      MsgAux  _ -> Nothing
-      MsgRT   r -> Just $ MsgRT r
-      MsgUser u -> Just $ MsgUser u
-      MsgProc p -> Just $ MsgProc p
+      MsgEnv _ -> Nothing
+      MsgLo  l -> Just $ MsgLo l
+      MsgHi  h -> Just $ MsgHi h
 
     onlyUser = \case
-      MsgUser uo -> Just uo
-      _          -> Nothing
+      MsgHi uo -> Just uo
+      _        -> Nothing
 
     simRunO t outs = do
       for_ outs $ simLog t
@@ -403,7 +408,7 @@ grunSimIO
    . SimLog (State p) xs
   => SimUserRe (State p) xs
   => SimReRe Serialise (State p) xs
-  => (  ProcEnv (SimFullState (State p) xs) IO
+  => (  ProcEnv Tick (SimFullState (State p) xs) IO
      -> SimFullState (State p) xs
      -> IO (SimFullState (State p) xs)
      )
@@ -415,21 +420,38 @@ grunSimIO
 grunSimIO lrunSim opt initXState mkPState simUserIO =
   bracket (openIOAction simIOAction) closeIOAction $ \SimIOAction {..} -> do
     --print opt
-    ifs <- case simIActRead simIState of
+    (new, ifs) <- case simIActRead simIState of
       Nothing -> do
         seed <- getEntropy @ScrubbedBytes 64
         let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
         states <- M.traverseWithKey (const . mkPState)
           $ M.fromSet (const ()) initPids
-        pure $ SimFullState states
-                            (newSimState seed simInitLatency initPids)
-                            initXState
+        pure
+          ( True
+          , SimFullState states
+                         (newSimState seed simInitLatency initPids)
+                         initXState
+          )
       Just h -> do
         rethrow (\e -> annotateIOError e "simIState" Nothing Nothing) $ do
           r <- LBS.hGetContents h
-          pure $ deserialiseNote "simIState read failed" r
+          pure (False, deserialiseNote "simIState read failed" r)
     whenJust (simIActWrite simIState) $ flip LBS.hPut (serialise ifs)
     LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
+
+    -- inject initial SimResetAddrs when starting out, otherwise we have no addresses
+    simUserIO' <- if not new
+      then pure simUserIO
+      else do
+        let (simUserI, simUserO) = simUserIO
+        injected <- newTVarIO False
+        let simUserI' = do
+              readTVarIO injected >>= \case
+                True  -> simUserI
+                False -> do
+                  atomically $ writeTVar injected True
+                  pure $ Just SimResetAddrs
+        pure (simUserI', simUserO)
 
     {-
     TODO: this is a hack that prevents ctrl-c from quitting the program in
@@ -463,7 +485,7 @@ grunSimIO lrunSim opt initXState mkPState simUserIO =
           else act id -- guard does nothing, no mask to restore
 
     let realNow = simNow (simState ifs)
-        mkRT    = defaultRT @_ @xs opt realNow simUserIO simIMsg simOMsg
+        mkRT    = defaultRT @_ @xs opt realNow simUserIO' simIMsg simOMsg
     bracket mkRT simClose $ \rt@SimRT {..} -> do
       let env = ProcEnv guard simRunI simRunO
       ofs <- lrunSim env ifs
@@ -506,7 +528,7 @@ handleSimResult = \case
 
 newSimAsync
   :: forall p
-   . Maybe (SimXUserO (State p) () -> IO ())
+   . Maybe (SimXHiO (State p) () -> IO ())
   -> (SimUserIO (State p) () -> IO (Either (NonEmpty SimError) ()))
   -> IO (UserSimAsync (State p) ())
 newSimAsync maybeEat runSimIO' = do
@@ -525,7 +547,7 @@ newSimAsync maybeEat runSimIO' = do
 
 convertSimData
   :: forall ps xs xo
-   . Ord (PAddr ps)
+   . Ord (Addr ps)
   => SimReRe Serialise ps xs
   => SimReRe Show ps xs
   => SimReRe Read ps xs => SimConvOptions xo -> IO ()

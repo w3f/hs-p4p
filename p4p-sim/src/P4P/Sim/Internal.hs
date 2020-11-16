@@ -21,7 +21,7 @@ import qualified Data.Set                         as S
 import           Control.Lens                     (Iso', anon, contains,
                                                    itraversed, use, (%%=),
                                                    (%%@=), (%=), (.=), _1, _2)
-import           Control.Lens.Mutable
+import           Control.Lens.Mutable             (Allocable (..), AsLens (..))
 import           Control.Lens.Mutable.Extra       (FakeAlloc1 (..),
                                                    newFakeAlloc1)
 import           Control.Monad                    (void, when)
@@ -42,10 +42,11 @@ import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
 import           Data.Schedule                    (Tick, TickDelta)
 import           Data.Traversable                 (for)
-import           P4P.Proc                         (GMsg (..), ProcAddr,
-                                                   ProcEnv (..), ProcMsgI,
-                                                   Process (..), ProtoMsg (..),
-                                                   RuntimeI (..), RuntimeO (..),
+import           P4P.Proc                         (GMsg (..), Observation (..),
+                                                   ProcAddr, ProcEnv (..),
+                                                   ProcIface (..), ProcMsgI,
+                                                   Process (..), UMsg (..),
+                                                   UPMsgI, UPMsgO, UProtocol,
                                                    asState, reactEnv)
 import           Safe                             (headNote)
 
@@ -99,6 +100,121 @@ type SimRunState p = (Map Pid p, SimState (State p))
 type SimT p = StateT (SimRunState p)
 type SimWT p m a = WriterT [SimO (State p)] (SimT p m) a
 
+type SimProcess p
+  = ( Ord (ProcAddr p)
+    , Process p
+    , EnvI (State p) ~ Tick
+    , UProtocol (State p)
+    , LoI (State p) ~ UPMsgI (State p)
+    , LoO (State p) ~ UPMsgO (State p)
+    )
+
+insProc
+  :: forall p m
+   . SimProcess p
+  => Ctx p m
+  => Monad m
+  => Pid
+  -> SimProcState (State p) (ProcMsgI p) (ProcAddr p)
+  -> SimWT p m p
+insProc pid sp = do
+  let SimProcState {..} = sp
+  proc <- lift2 $ proceed @p spState
+  _1 . at pid .= Just proc
+  _2 . _simIn . at pid .= Just spInbox
+  for_ spAddr $ \a -> do
+    _2 . _simAddr . at a . nom . contains pid .= True
+  pure proc
+
+delProc
+  :: forall p m
+   . SimProcess p
+  => Ctx p m
+  => Monad m
+  => Pid
+  -> p
+  -> SimWT p m (SimProcState (State p) (ProcMsgI p) (ProcAddr p))
+delProc pid proc = do
+  spState <- lift2 $ suspend @p proc
+  _1 . at pid .= Nothing
+  spInbox <- _2 . _simIn . at pid . nom %%= (, mempty)
+  spAddr  <- extractAddress pid True
+  pure $ SimProcState { .. }
+
+-- extract the addresses of a pid, and maybe delete them
+extractAddress
+  :: Ord (ProcAddr p)
+  => Monad m => Pid -> Bool -> SimWT p m (S.Set (ProcAddr p))
+extractAddress pid del = do
+  _2 . _simAddr . itraversed %%@= \addr pids -> do
+    if S.member pid pids
+      then (S.singleton addr, if del then S.delete pid pids else pids)
+      else (S.empty, pids)
+
+-- map (or unmap) an address to a pid
+mapAddress
+  :: Ord (ProcAddr p) => Monad m => ProcAddr p -> Pid -> Bool -> SimWT p m ()
+mapAddress addr pid b = _2 . _simAddr . at addr . nom . contains pid .= b
+
+-- pop a single inbox message up-to-and-including @realNow@
+popPMsgI :: Monad m => Tick -> Pid -> SimWT p m (Maybe (ProcMsgI p))
+popPMsgI realNow pid = _2 . _simIn . at pid . nom %%= \inboxes ->
+  case M.minViewWithKey inboxes of
+    Just ((t, ibx), remain) | t <= realNow -> case ibx of
+      msgI SQ.:<| rest ->
+        (Just msgI, if null rest then remain else M.insert t rest remain)
+      SQ.Empty ->
+        -- "if null rest" above should prevent this from being reached
+        error "got empty Seq despite guard-logic"
+    _ -> (Nothing, inboxes) -- empty inboxes or min tick > now
+
+-- push a single inbox message for @future@
+pushPMsgI :: Monad m => Tick -> Pid -> ProcMsgI p -> SimWT p m ()
+pushPMsgI future pid msgI =
+  _2 . _simIn . at pid . nom . at future . nom %= (SQ.|> msgI)
+
+-- process input and deliver outgoing messages
+procInput
+  :: SimProcess p
+  => Ctx p m => Monad m => Tick -> Pid -> p -> ProcMsgI p -> SimWT p m ()
+procInput realNow pid proc msgI = do
+  let logS = tell1 . MsgEnv . SimProcEvent
+  logS $ SimMsgRecv pid msgI
+  outs     <- lift2 $ reactM proc msgI
+  srcAddrs <- S.toList <$> extractAddress pid False
+
+  -- deliver outputs
+  for_ outs $ \case
+    msg@(MsgHi uo) -> do
+      logS $ SimMsgSend pid msg
+      tell1 $ MsgHi $ SimProcHiO pid uo
+    MsgEnv ao -> do
+      tell1 $ MsgEnv $ SimUserAuxO pid ao
+    imsg@(MsgLo (UData dst msg)) -> do
+      -- to proc, send it to other's inbox
+      procs <- use _1
+      pids' <- use (_2 . _simAddr . at dst . nom) >$> toList
+      pids  <- fmap catMaybes $ for pids' $ \p -> case M.lookup p procs of
+        Nothing -> do
+          logS $ SimNoSuchPid (Right pid) p
+          pure Nothing
+        Just dstProc -> pure (Just p)
+      when (null pids) $ do
+        logS $ SimMsgSend pid imsg
+        logS $ SimNoSuchAddr pid dst
+      for_ pids $ \p -> do
+        simLatency   <- use $ _2 . _simLatency
+        (delta, src) <- _2 . _simDRG %%= sampleLatency srcAddrs dst simLatency
+        let future = int realNow + int delta
+        pushPMsgI future p (MsgLo (UData src msg))
+        logS $ SimMsgSend pid imsg
+    MsgLo (UOwnAddr obs) -> do
+      void $ flip M.traverseWithKey obs $ \addr ob -> do
+        let b = case ob of
+              ObsPositive _ -> True
+              ObsNegative _ -> False
+        mapAddress addr pid b
+
 {- | React to a simulation input. -}
 simReact
   :: forall p m
@@ -107,7 +223,7 @@ simReact
 simReact input = execWriterT $ do
   realNow <- use $ _2 . _simNow
   procs   <- use _1
-  let logU = tell1 . MsgUser
+  let logU = tell1 . MsgHi
 
   -- run messages up-to-and-including current tick
   _ <- whileJustM $ do
@@ -118,20 +234,23 @@ simReact input = execWriterT $ do
       >$> bool (Just ()) Nothing
 
   case input of
-    MsgRT (RTTick newNow ()) -> do
+    MsgEnv newNow -> do
       -- TODO: assert newNow > realNow
       void $ M.traverseWithKey (runTick newNow) procs
       -- it's important that this is the last thing we do
       _2 . _simNow .= newNow
-    MsgUser SimGetAllPids -> do
+    MsgHi SimResetAddrs -> do
+      void $ flip M.traverseWithKey procs $ \pid proc -> do
+        procInput realNow pid proc (MsgLo (UOwnAddr mempty))
+    MsgHi SimGetAllPids -> do
       logU $ SimAllPids $ M.keysSet procs
-    MsgUser SimGetAllInboxSizes -> do
+    MsgHi SimGetAllInboxSizes -> do
       inboxes <- use $ _2 . _simIn
       let count inbox = sum (SQ.length <$> inbox)
       logU $ SimAllInboxSizes $ fmap count inboxes
-    MsgUser SimGetTickNow -> do
+    MsgHi SimGetTickNow -> do
       logU $ SimTickNow realNow
-    MsgUser (SimGetState f) -> do
+    MsgHi (SimGetState f) -> do
       simSt <- use _2
       simPs <- flip M.traverseWithKey procs $ \pid proc -> do
         spState <- lift2 $ suspend @p proc
@@ -142,78 +261,34 @@ simReact input = execWriterT $ do
         logU $ simPs `seq` SimGetStateResult simPs simSt
       when (f == 0) $ do
         logU $ simPs `seq` SimGetStateResult mempty simSt
-    MsgUser (SimProcAdd pid sp) -> do
+    MsgHi (SimProcAdd pid sp) -> do
       -- insert process
       if M.member pid procs
         then logU $ SimProcAddResult pid False
         else do
           _ <- insProc pid sp
           logU $ SimProcAddResult pid True
-    MsgUser (SimProcGet pid) -> do
+    MsgHi (SimProcGet pid) -> do
       case M.lookup pid procs of
         Nothing   -> logU $ SimProcGetResult pid Nothing
         Just proc -> do
           sp <- delProc pid proc
           _  <- insProc pid sp
           logU $ SimProcGetResult pid $ Just sp
-    MsgUser (SimProcDel pid) -> do
+    MsgHi (SimProcDel pid) -> do
       case M.lookup pid procs of
         Nothing   -> logU $ SimProcDelResult pid Nothing
         Just proc -> do
           sp <- delProc pid proc
           logU $ SimProcDelResult pid $ Just sp
-    MsgUser (SimProcUserI pid userI) -> do
+    MsgHi (SimProcHiI pid hiI) -> do
       -- user message to a process
       case M.lookup pid procs of
         Nothing -> do
-          tell1 $ MsgAux $ SimProcEvent $ SimNoSuchPid (Left ()) pid
+          tell1 $ MsgEnv $ SimProcEvent $ SimNoSuchPid (Left ()) pid
         Just _ -> do
-          pushPMsgI realNow pid (MsgUser userI)
+          pushPMsgI realNow pid (MsgHi hiI)
  where
-  insProc
-    :: Pid -> SimProcState (State p) (ProcMsgI p) (ProcAddr p) -> SimWT p m p
-  insProc pid sp = do
-    let SimProcState {..} = sp
-    proc <- lift2 $ proceed @p spState
-    _1 . at pid .= Just proc
-    _2 . _simIn . at pid .= Just spInbox
-    for_ spAddr $ \a -> do
-      _2 . _simAddr . at a . nom . contains pid .= True
-    pure proc
-
-  delProc
-    :: Pid -> p -> SimWT p m (SimProcState (State p) (ProcMsgI p) (ProcAddr p))
-  delProc pid proc = do
-    spState <- lift2 $ suspend @p proc
-    _1 . at pid .= Nothing
-    spInbox <- _2 . _simIn . at pid . nom %%= (, mempty)
-    spAddr  <- _2 . _simAddr . itraversed %%@= \addr pids -> do
-      if S.member pid pids
-        then (S.singleton addr, S.delete pid pids)
-        else (S.empty, pids)
-    pure $ SimProcState { .. }
-
-  -- pop a single inbox message up-to-and-including @realNow@
-  popPMsgI :: Tick -> Pid -> SimWT p m (Maybe (ProcMsgI p))
-  popPMsgI realNow pid = _2 . _simIn . at pid . nom %%= \inboxes ->
-    case M.minViewWithKey inboxes of
-      Just ((t, ibx), remain) | t <= realNow -> case ibx of
-        msgI SQ.:<| rest ->
-          (Just msgI, if null rest then remain else M.insert t rest remain)
-        SQ.Empty ->
-          -- "if null rest" above should prevent this from being reached
-          error "got empty Seq despite guard-logic"
-      _ -> (Nothing, inboxes) -- empty inboxes or min tick > now
-
-  -- push a single inbox message for @future@
-  pushPMsgI :: Tick -> Pid -> ProcMsgI p -> SimWT p m ()
-  pushPMsgI future pid msgI =
-    _2 . _simIn . at pid . nom . at future . nom %= (SQ.|> msgI)
-
-  -- map (or unmap) an address to a pid
-  mapAddress :: ProcAddr p -> Pid -> Bool -> SimWT p m ()
-  mapAddress addr pid b = _2 . _simAddr . at addr . nom . contains pid .= b
-
   -- run the next message from the inbox, if available
   runInbox :: Tick -> Pid -> p -> SimWT p m (Maybe p)
   runInbox realNow pid proc = popPMsgI realNow pid >>= \case
@@ -225,60 +300,11 @@ simReact input = execWriterT $ do
   -- run the next tick
   runTick :: Tick -> Pid -> p -> SimWT p m ()
   runTick realNow pid proc = do
-    let tickMsg = MsgRT (RTTick realNow ())
+    let tickMsg = MsgEnv realNow
     procInput realNow pid proc tickMsg
     pure ()
 
-  -- process input and deliver outgoing messages
-  procInput :: Tick -> Pid -> p -> ProcMsgI p -> SimWT p m ()
-  procInput realNow pid proc msgI = do
-    let logS = tell1 . MsgAux . SimProcEvent
-    logS $ SimMsgRecv pid msgI
-    outs  <- lift2 $ reactM proc msgI
-
-    -- add all current addresses to address-book
-    -- note that we don't check for deregistrations here, but later
-    -- TODO: handle RTAddr below instead of getAddrs here, more efficient
-    addrs <- lift2 $ getAddrsM proc
-    for_ addrs $ \addr -> mapAddress addr pid True
-
-    -- deliver outputs
-    for_ outs $ \case
-      MsgRT (RTAddr _) -> do
-        pure () -- TODO: handle this properly
-      msg@(MsgUser uo) -> do
-        logS $ SimMsgSend pid msg
-        tell1 $ MsgUser $ SimProcUserO pid uo
-      MsgAux ao -> do
-        tell1 $ MsgAux $ SimUserAuxO pid ao
-      MsgProc msg -> do
-        -- to proc, send it to other's inbox
-        let dst = getTarget msg
-        procs <- use _1
-        pids' <- use (_2 . _simAddr . at dst . nom) >$> toList
-        pids  <- for pids' $ \p -> case M.lookup p procs of
-          Nothing -> do
-            logS $ SimNoSuchPid (Right pid) p
-            pure Nothing
-          Just dstProc -> lift2 (getAddrsM dstProc) >>= \case
-            dstAddrs | dst `notElem` dstAddrs -> do
-              -- proc no longer wants this address, deregister it
-              mapAddress dst p False
-              pure Nothing
-            _ -> pure (Just p)
-        when (null (catMaybes pids)) $ do
-          logS $ SimMsgSend pid (MsgProc msg)
-          logS $ SimNoSuchAddr pid dst
-        for_ (catMaybes pids) $ \p -> do
-          simLatency   <- use $ _2 . _simLatency
-          (delta, src) <- _2 . _simDRG %%= sampleLatency addrs dst simLatency
-          let msg'   = setSource src msg
-          let future = int realNow + int delta
-          pushPMsgI future p (MsgProc msg')
-          logS $ SimMsgSend pid (MsgProc msg')
-
 newtype PSim ref st p = PSim (ref (SimRunState p))
-type SimProcess p = (Ord (ProcAddr p), Process p)
 
 instance (
   SimProcess p,
@@ -305,28 +331,30 @@ instance (
     ps          <- lift $ suspendAll procs
     pure (SimFullState ps ss ())
 
-  getAddrsM (PSim r) = pure []
-
-  localNowM (PSim r) = use $ asLens r . _2 . _simNow
-
   reactM (PSim r) i = do
     ps0      <- use $ asLens r
     (o, ps1) <- lift $ simReact i `runStateT` ps0
     asLens r .= ps1
     pure o
 
+simNowM
+  :: Allocable st (SimRunState p) ref
+  => Ctx (PSim ref st p) m => PSim ref st p -> m Tick
+simNowM (PSim r) = use $ asLens r . _2 . _simNow
+
 -- note: @p@ here refers to the process type of the whole simulation, not the
 -- individual processes being simulated
 simulate
-  :: forall p m
+  :: forall p m i
    . (Process p, Monad m, Ctx p m)
-  => ProcEnv (State p) m
+  => (p -> m i)
+  -> ProcEnv i (State p) m
   -> State p
   -> m (State p)
-simulate env = fmap snd . asState (reactEnv @p env)
+simulate procInfo env = fmap snd . asState (reactEnv @p procInfo env)
 
 liftEnv
-  :: forall ps st m . Monad m => ProcEnv ps m -> ProcEnv ps (StateT st m)
+  :: forall i ps st m . Monad m => ProcEnv i ps m -> ProcEnv i ps (StateT st m)
 liftEnv env = ProcEnv { envGuard = guard
                       , envI     = lift envI
                       , envO     = (lift .) . envO
@@ -348,9 +376,11 @@ runSim
    . SimProcess p
   => Ctx p m
   => Monad m
-  => ProcEnv (SimFullState (State p) ()) m
+  => ProcEnv Tick (SimFullState (State p) ()) m
   -> SimFullState (State p) ()
   -> m (SimFullState (State p) ())
 runSim env s0 =
-  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p) (liftEnv env) s0
+  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p) simNowM
+                                                             (liftEnv env)
+                                                             s0
     `evalStateT` newFakeAlloc1

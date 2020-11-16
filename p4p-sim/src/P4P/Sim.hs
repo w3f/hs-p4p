@@ -5,10 +5,10 @@ module P4P.Sim
   -- * Main definitions
     KV(..)
   , Pid
-  , SimUserI'(..)
-  , SimUserI
-  , SimUserO'(..)
-  , SimUserO
+  , SimHiI'(..)
+  , SimHiI
+  , SimHiO'(..)
+  , SimHiO
   , SimProcEvt'(..)
   , SimProcEvt
   , SimState'(..)
@@ -25,7 +25,7 @@ module P4P.Sim
   , runSim
   , convertSimData
   -- * Extensions
-  , SimXProtocol(..)
+  , SimXProcIface(..)
   , runSimX
   , runSimXS
   -- * Options

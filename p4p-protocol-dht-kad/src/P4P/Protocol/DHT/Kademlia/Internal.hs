@@ -15,6 +15,7 @@ TODO: lens for Sequence.Extra shit, lens for bounded containers...
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE UndecidableInstances  #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
 --{-# OPTIONS_GHC -Wno-unused-imports -Wno-redundant-constraints #-}
@@ -76,6 +77,7 @@ import           Data.Foldable                     (for_, toList)
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
 import           Data.Map.Bounded                  (ValueAt (..), sizeBMap2)
+import           Data.Maybe                        (mapMaybe)
 import           Data.Tuple                        (swap)
 --import           Debug.Pretty.Simple               (pTraceShowId)
 import           Safe                              (fromJustNote)
@@ -349,13 +351,14 @@ kBucketMaint
   -> State g
   -> m ([KadO], State g)
 kBucketMaint input oreqProc' = case input of
-  P.MsgRT (P.RTTick realNow task) -> case task of
+  P.MsgEnv (realNow, task) -> case task of
     TOOReq dst reqBody -> case reqBody of
       Ping -> insertNodeIdTOReqPing realNow dst
       _    -> doNothing
     _ -> doNothing
-  P.MsgUser _        -> doNothing
-  P.MsgProc Msg {..} -> case body of
+  P.MsgHi _                          -> doNothing
+  P.MsgLo (P.UOwnAddr _            ) -> doNothing
+  P.MsgLo (P.UData srcAddr Msg {..}) -> case body of
     Left Request{} -> do
       insertNodeId Nothing False src srcAddr
     Right Reply {..} -> case oreqProc' of
@@ -482,7 +485,7 @@ icmdRunInput cmdId cmdProc rep input s0 = flip runStateWT s0 $ do
   reply <- kQuery (s, input)
   whenJust reply $ \r -> do
     when (icmdExternal cmdProc) $ do
-      lift $ tell [P.MsgUser $ CommandReply cmdId $ Right r]
+      lift $ tell [P.MsgHi $ CommandReply cmdId $ Right r]
     _kRecvCmd . unsafeIx cmdId . _icmdResult .= Z.Just r
  where
   State { kParams }   = s0
@@ -664,14 +667,11 @@ oreqRequest
   -> m ([KadO], State g)
 oreqRequest nInfo reqBody s0 = flip runStateWT s0 $ do
   let NodeInfo reqDst reqDstAddrs = nInfo
-  let mkMsg now req = Msg { src     = kSelf s0
-                          , srcAddr = mempty -- Proc runtime will set this properly, via setSource
-                          , dst     = reqDst
-                          , dstAddr = S.bLast reqDstAddrs
-                          -- TODO(addr): better selection method for addr, use multiple
-                          , sent    = now
-                          , body    = Left req
-                          }
+  -- TODO(addr): better selection method for addr, use multiple
+  let mkMsg now req =
+        ( S.bLast reqDstAddrs
+        , Msg { src = kSelf s0, dst = reqDst, sent = now, body = Left req }
+        )
   statewT $ oreqEnsure' mkMsg reqDst reqBody
  where
   State {..}   = s0
@@ -736,7 +736,7 @@ kHandleInput
   -> State g
   -> m ([KadO], State g)
 kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
-  P.MsgRT (P.RTTick realNow task) -> case task of
+  P.MsgEnv (realNow, task) -> case task of
     SelfCheck -> do
       runExceptT (checkState s0) >>= \case
         Left  err -> writeLog $ W_SelfCheckFailed err
@@ -768,10 +768,10 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
       statewT $ icmdOReqCancel_' cmdId reqDst reqBody
       stateWT $ icmdOReqResult cmdId reqDst reqBody (F.TimedOut ())
     TOICmd cmdId -> statewT $ icmdDelete' cmdId parTOICmd
-  P.MsgUser cmd -> stateWT $ icmdStart cmd True
-  P.MsgProc msg -> case body msg of
+  P.MsgHi cmd                   -> stateWT $ icmdStart cmd True
+  P.MsgLo (P.UData srcAddr msg) -> case body msg of
     Left Request {..} -> do
-      statewT $ ireqEnsure' msg $ \s -> case reqBody of
+      statewT $ ireqEnsure' srcAddr msg $ \s -> case reqBody of
         Ping         -> (Pong, s)
         GetNode  nId -> (GetNodeReply $ kGetNodes nId s, s)
         GetValue k   -> case kStore ^? ix k of
@@ -786,6 +786,9 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
         Just oreqProc -> stateWT $ do
           let (reqDst, reqBody) = fst $ oreqIndex $ oreqMsg oreqProc
           oreqResult_ reqDst reqBody (F.GotResult r) icmdOReqResult
+  P.MsgLo (P.UOwnAddr obs) -> if null obs
+    then lift $ tell [P.MsgLo $ P.UOwnAddr ownObs]
+    else error "not implemented"
  where
   State {..}         = s0
   KParams {..}       = kParams
@@ -802,6 +805,11 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
       fmap runIdentity . runStateWT $ for_ waiting $ \cmdId -> do
         stateWT $ handleResult cmdId reqDst reqBody result
 
+  ownObs = M.fromList $ mapMaybe onlyRightAddrs $ toList $ ownNodeAddrs s0
+  onlyRightAddrs (a Z.:!: b) = case a of
+    Z.Left  _ -> Nothing
+    Z.Right r -> Just (b, P.ObsPositive r)
+
 {- | Top-level input processing function.
 
 Main entry point for this Kademlia protocol state-machine.
@@ -812,10 +820,10 @@ kInput :: (R.DRG' g, Monad m) => KadI -> State g -> m ([KadO], State g)
 kInput input s0 = flip runStateWT s0 $ do
   -- prelim processing for child functions
   let (oreqProc', maybePing, maybeDst) = case input of
-        P.MsgProc recvMsg@Msg {..} -> case body of
+        P.MsgLo (P.UData srcAddr recvMsg@Msg {..}) -> case body of
           Right Reply {..} ->
             ( kSentReqId ^? ix repReqId >>= \k -> kSentReq ^? ix (Z.toLazy k)
-            , P.MsgProc <$> pingReplyToRequest recvMsg
+            , P.MsgLo . P.UData srcAddr <$> pingReplyToRequest recvMsg
             , Just (dst, recvMsg)
             )
           _ -> (Nothing, Nothing, Just (dst, recvMsg))
@@ -831,15 +839,18 @@ kInput input s0 = flip runStateWT s0 $ do
 
 kInput'
   :: (R.DRG' g, Monad m) => KadI' -> StateT (State g) (WriterT [KadO] m) ()
-kInput' = tickTask (_kSchedule %%=) P._MsgI_RTTick (stateWT . kInput)
+kInput' = tickTask (_kSchedule %%=) P._MsgEnv (stateWT . kInput)
 
-instance P.Protocol (State g) where
-  type PMsg (State g) = Msg
-  type UserI (State g) = KUserI
-  type UserO (State g) = KUserO
+instance P.UProtocol (State g) where
+  type Addr (State g) = NodeAddr
+  type Msg (State g) = Msg
+
+instance P.ProcIface (State g) where
+  type LoI (State g) = P.UPMsgI (State g)
+  type LoO (State g) = P.UPMsgO (State g)
+  type HiI (State g) = KHiI
+  type HiO (State g) = KHiO
   type AuxO (State g) = KLogMsg
 
 instance R.DRG' g => P.Proc (State g) where
-  getAddrs s = toList $ niNodeAddr $ ownNodeInfo s
-  localNow s = SC.tickNow $ kSchedule s
   react i s = runIdentity (runStateWT (kInput' i) s)

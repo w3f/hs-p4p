@@ -11,7 +11,7 @@
 
 -- external
 import           Codec.Serialise               (Serialise (..))
-import           P4P.Proc                      (PAddr)
+import           P4P.Proc                      (Addr)
 
 -- external, IO
 import           System.Environment            (getArgs)
@@ -24,7 +24,7 @@ import           P4P.Sim.Experiments.Protocol
 
 
 type SimPC' ps
-  = (Ord (PAddr ps), SimReReP Serialise ps, SimReReP Show ps, SimReReP Read ps)
+  = (Ord (Addr ps), SimReReP Serialise ps, SimReReP Show ps, SimReReP Read ps)
 class SimPC' ps => SimPC ps
 instance SimPC' ps => SimPC ps
 

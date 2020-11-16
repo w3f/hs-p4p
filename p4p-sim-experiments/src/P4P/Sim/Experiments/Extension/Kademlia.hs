@@ -27,6 +27,7 @@ import           Data.Binary                      (Binary)
 import           Data.Foldable                    (for_)
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (fromJust)
+import           Data.Void                        (Void)
 import           GHC.Generics                     (Generic)
 
 -- external, p4p
@@ -56,36 +57,34 @@ data KSimO = KSimJoinStarted | KSimJoinFinished
   deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 makeLenses_ ''KSimO
 
-instance Protocol KSimState where
-  type PMsg KSimState = Void
-  type UserI KSimState = Either (SimUserO KS) KSimI
-  type UserO KSimState = Either (SimUserI KS) KSimO
-  type AuxO KSimState = Void
+instance ProcIface KSimState where
+  type LoI KSimState = Void
+  type LoO KSimState = Void
+  type HiI KSimState = Either (SimHiO KS) KSimI
+  type HiO KSimState = Either (SimHiI KS) KSimO
 
-instance SimXProtocol KS KSimState where
-  type XUserI KSimState = KSimI
-  type XUserO KSimState = KSimO
+instance SimXProcIface KS KSimState where
+  type XHiI KSimState = KSimI
+  type XHiO KSimState = KSimO
 
 instance Proc KSimState where
-  getAddrs = const []
-  localNow = const 0
   react i = runState $ case i of
-    MsgUser ui -> (MsgUser <$>) <$> kSim ui
-    _          -> pure []
+    MsgHi ui -> (MsgHi <$>) <$> kSim ui
+    _        -> pure []
 
 sendCommand
   :: Monad m
   => Pid
   -> CommandBody
-  -> WriterT [Either (SimUserI KS) KSimO] (StateT KSimState m) ()
+  -> WriterT [Either (SimHiI KS) KSimO] (StateT KSimState m) ()
 sendCommand pid cmd = do
   cId <- _ksDRG %%= randomBytesGenerate reqIdWith
-  tell1 $ Left $ SimProcUserI pid $ Command cId cmd
+  tell1 $ Left $ SimProcHiI pid $ Command cId cmd
 
 kSim
   :: Monad m
-  => Either (SimUserO KS) KSimI
-  -> StateT KSimState m [Either (SimUserI KS) KSimO]
+  => Either (SimHiO KS) KSimI
+  -> StateT KSimState m [Either (SimHiI KS) KSimO]
 kSim input = execWriterT $ do
   ks <- lift get
   case (ksJoining ks, input) of
@@ -98,7 +97,7 @@ kSim input = execWriterT $ do
       for_ pids $ \pid -> do
         sendCommand pid GetNodeId
       _ksJoining .= Just (Left (M.fromSet (const Nothing) pids))
-    (Just (Left ns), Left (SimProcUserO pid (CommandReply _ (Right (OwnNodeId nId)))))
+    (Just (Left ns), Left (SimProcHiO pid (CommandReply _ (Right (OwnNodeId nId)))))
       | M.member pid ns
       -> do
       -- receive node ids

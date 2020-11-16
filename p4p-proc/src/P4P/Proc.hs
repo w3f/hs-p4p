@@ -1,32 +1,36 @@
 {-| P4P process abstractions. -}
 
 module P4P.Proc
-  ( ProtoMsg(..)
-  , RuntimeI(..)
-  , RuntimeO(..)
-  , Protocol(..)
-  , PAddr
+  ( ProcIface(..)
   , GMsg(..)
   , GMsgI
   , GMsgO
-  , Void
-  -- proc
+  , PMsgI
+  , PMsgO
   , Proc(..)
   , Process(..)
-  , ProcAddr
   , ProcMsgI
   , ProcMsgO
   , reactAllM
   , asState
   , ProcEnv(..)
   , reactEnv
+  -- protocol
+  , Observation(..)
+  , Observations
+  , UProtocol(..)
+  , UMsg(..)
+  , UMsgI
+  , UMsgO
+  , UPMsgI
+  , UPMsgO
+  , ProcAddr
   -- instances
   , PRef(..)
   , PMut(..)
   )
 where
 
-import           Data.Void          (Void)
 import           P4P.Proc.Instances
 import           P4P.Proc.Internal
-import           P4P.Proc.Types
+import           P4P.Proc.Protocol

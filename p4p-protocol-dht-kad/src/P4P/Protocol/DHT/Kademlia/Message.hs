@@ -85,28 +85,21 @@ data ReplyBody =
     deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 data Reply = Reply
-  { repReqId      :: !ReqId
-  , repReqDstAddr :: !NodeAddr
-  -- ^ The dstAddr field of the original request that triggered this reply.
-  , repPing       :: !(Maybe ReqId)
+  { repReqId :: !ReqId
+  , repPing  :: !(Maybe ReqId)
   -- ^ Pings can also be piggy-backed on RPC replies for the RPC recipient to
   -- obtain additional assurance of the sender's network address.
-  , repBody       :: !(Either RequestRejected ReplyBody)
+  , repBody  :: !(Either RequestRejected ReplyBody)
   }
   deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
 type MsgBody = Either Request Reply
 
 data Msg = Msg
-  { src     :: !NodeId
-  , srcAddr :: !NodeAddr
-  , dst     :: !NodeId
-  , dstAddr :: !NodeAddr
-  -- ^ The destination address the sender attempted to send the message to.
-  -- The insecure network may route it to a different one, but the recipient
-  -- will at see what we authenticate here, once we add that functionality.
-  , sent    :: !SC.Tick
-  , body    :: !MsgBody
+  { src  :: !NodeId
+  , dst  :: !NodeId
+  , sent :: !SC.Tick
+  , body :: !MsgBody
   }
   deriving (Show, Read, Generic, Binary, Serialise, Eq, Ord)
 
@@ -120,24 +113,21 @@ pingReplyToRequest msg@Msg {..} = case body of
 
 replyForRequest
   :: HasCallStack
-  => Msg
+  => NodeAddr
+  -> Msg
   -> Either RequestRejected ReplyBody
   -> SC.Tick
-  -> NodeAddr
   -> KadO
-replyForRequest req@Msg {..} reply now addr = case body of
+replyForRequest srcAddr req@Msg {..} reply now = case body of
   Right _            -> error "input message was not a request"
-  Left  Request {..} -> P.MsgProc $ Msg
-    { src     = dst
-    , srcAddr = dstAddr
-    , dst     = src
-    , dstAddr = addr
-    , sent    = now
-    , body    = Right Reply { repReqId      = reqId
-                            , repReqDstAddr = dstAddr
-                            , repPing       = Nothing
-                            , repBody       = reply
-                            }
+  Left  Request {..} -> P.MsgLo $ P.UData srcAddr $ Msg
+    { src  = dst
+    , dst  = src
+    , sent = now
+    , body = Right Reply { repReqId = reqId
+                         , repPing  = Nothing
+                         , repBody  = reply
+                         }
     }
 
 {- | High-level command from a user.
@@ -272,17 +262,12 @@ data KLogMsg =
 
 {- | * Top-level message types -}
 
-type KUserI = Command
-type KUserO = CommandReply
+type KHiI = Command
+type KHiO = CommandReply
 
-instance P.ProtoMsg Msg where
-  type Ent Msg = NodeAddr
-  getTarget = dstAddr
-  setSource srcAddr' m = m { srcAddr = srcAddr' }
-
-type KadI' = P.GMsg (P.RuntimeI ()) KUserI Msg P.Void
-type KadI = P.GMsg (P.RuntimeI KTask) KUserI Msg P.Void
-type KadO = P.GMsg (P.RuntimeO NodeAddr) KUserO Msg KLogMsg
+type KadI' = P.GMsgI SC.Tick (P.UMsgI NodeAddr Msg) KHiI
+type KadI = P.GMsgI (SC.Tick, KTask) (P.UMsgI NodeAddr Msg) KHiI
+type KadO = P.GMsgO KLogMsg (P.UMsgO NodeAddr Msg) KHiO
 
 kLog :: KLogMsg -> KadO
-kLog = P.MsgAux
+kLog = P.MsgEnv

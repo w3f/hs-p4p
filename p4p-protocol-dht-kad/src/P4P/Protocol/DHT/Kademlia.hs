@@ -19,8 +19,8 @@ module P4P.Protocol.DHT.Kademlia
   -- High-level types
   , KState
   , KMsg
-  , KUserI
-  , KUserO
+  , KHiI
+  , KHiO
   , KadI
   , KadO
   , defaultParams

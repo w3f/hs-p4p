@@ -86,8 +86,8 @@ Library
     P4P.Proc.Lens
     P4P.Proc.Internal
     P4P.Proc.Instances
+    P4P.Proc.Protocol
     P4P.Proc.Stream
-    P4P.Proc.Types
     P4P.Proc.Util
     P4P.Proc.Util.FlowControl
 
