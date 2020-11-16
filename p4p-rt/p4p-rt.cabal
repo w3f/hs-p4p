@@ -74,8 +74,10 @@ Library
     , binary
     , bytestring
     , cborg
+    , containers
     , directory
     , lens
+    , network
     , optparse-applicative
     , pretty-simple
     , primitive
@@ -93,7 +95,9 @@ Library
   Exposed-Modules:
     P4P.RT
     P4P.RT.Client
+    P4P.RT.EchoProcess
     P4P.RT.Options
+    P4P.RT.Protocol
     P4P.RT.Internal
     P4P.RT.Internal.Serialise
 

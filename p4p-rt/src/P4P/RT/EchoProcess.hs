@@ -5,50 +5,44 @@
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module P4P.Sim.EchoProcess where
+module P4P.RT.EchoProcess where
 
 -- external
 import qualified Data.Map.Strict as M
 
 import           Codec.Serialise (Serialise (..))
 import           Data.Binary     (Binary (..))
-import           Data.Word       (Word16)
 import           GHC.Generics    (Generic)
 import           P4P.Proc
 
 
-type EAddr = Word16
-type EchoMsg = String
+data Direction = Rwd | Fwd
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+
+type EchoMsg = (Direction, String)
 
 data EchoState = EState
-  { addrs :: ![EAddr]
-  , count :: !Word16
+  { addrs :: ![SockAddr]
+  , count :: !Tick
   }
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-type EchoUserI = String
-type EchoUserO = String
-
 instance UProtocol EchoState where
-  type Addr EchoState = EAddr
   type Msg EchoState = EchoMsg
 
 instance ProcIface EchoState where
   type LoI EchoState = UPMsgI EchoState
   type LoO EchoState = UPMsgO EchoState
-  type HiI EchoState = EchoUserI
-  type HiO EchoState = EchoUserO
+  type HiI EchoState = (SockAddr, EchoMsg)
+  type HiO EchoState = (SockAddr, EchoMsg)
 
 instance Proc EchoState where
   react i s = case i of
-    MsgEnv _ ->
-      -- automatically send a message every 1000 ticks
-      let k   = count s
-          a   = head $ addrs s
-          msg = [ MsgLo (UData (succ a) "echo") | k `mod` 1000 == 0 ]
-      in  (msg, s { count = if k == maxBound then 0 else succ k })
-    MsgHi u              -> ([MsgHi u], s) -- echo reply back
-    MsgLo (UData _ _   ) -> ([], s)
+    MsgEnv t                           -> ([], s { count = t })
+    MsgHi  (dst, msg)                  -> ([MsgLo (UData dst msg)], s) -- pass it on
+    MsgLo  (UData src msg@(dir, body)) -> case dir of
+      Rwd -> ([MsgLo (UData src (Fwd, body))], s) -- echo reply back
+      Fwd -> ([MsgHi (src, msg)], s) -- forward it to the user
     MsgLo (UOwnAddr obs) -> if null obs
       then ([MsgLo (UOwnAddr (M.fromList $ (, ObsPositive 0) <$> addrs s))], s)
       else error "not implemented"

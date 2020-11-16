@@ -184,36 +184,35 @@ procInput realNow pid proc msgI = do
   srcAddrs <- S.toList <$> extractAddress pid False
 
   -- deliver outputs
-  for_ outs $ \case
-    msg@(MsgHi uo) -> do
-      logS $ SimMsgSend pid msg
-      tell1 $ MsgHi $ SimProcHiO pid uo
-    MsgEnv ao -> do
-      tell1 $ MsgEnv $ SimUserAuxO pid ao
-    imsg@(MsgLo (UData dst msg)) -> do
-      -- to proc, send it to other's inbox
-      procs <- use _1
-      pids' <- use (_2 . _simAddr . at dst . nom) >$> toList
-      pids  <- fmap catMaybes $ for pids' $ \p -> case M.lookup p procs of
-        Nothing -> do
-          logS $ SimNoSuchPid (Right pid) p
-          pure Nothing
-        Just dstProc -> pure (Just p)
-      when (null pids) $ do
-        logS $ SimMsgSend pid imsg
-        logS $ SimNoSuchAddr pid dst
-      for_ pids $ \p -> do
-        simLatency   <- use $ _2 . _simLatency
-        (delta, src) <- _2 . _simDRG %%= sampleLatency srcAddrs dst simLatency
-        let future = int realNow + int delta
-        pushPMsgI future p (MsgLo (UData src msg))
-        logS $ SimMsgSend pid imsg
-    MsgLo (UOwnAddr obs) -> do
-      void $ flip M.traverseWithKey obs $ \addr ob -> do
-        let b = case ob of
-              ObsPositive _ -> True
-              ObsNegative _ -> False
-        mapAddress addr pid b
+  for_ outs $ \out -> do
+    logS $ SimMsgSend pid out
+    case out of
+      msg@(MsgHi uo) -> do
+        tell1 $ MsgHi $ SimProcHiO pid uo
+      MsgEnv ao -> do
+        tell1 $ MsgEnv $ SimUserAuxO pid ao
+      imsg@(MsgLo (UData dst msg)) -> do
+        -- to proc, send it to other's inbox
+        procs <- use _1
+        pids' <- use (_2 . _simAddr . at dst . nom) >$> toList
+        pids  <- fmap catMaybes $ for pids' $ \p -> case M.lookup p procs of
+          Nothing -> do
+            logS $ SimNoSuchPid (Right pid) p
+            pure Nothing
+          Just dstProc -> pure (Just p)
+        when (null pids) $ do
+          logS $ SimNoSuchAddr pid dst
+        for_ pids $ \p -> do
+          simLatency   <- use $ _2 . _simLatency
+          (delta, src) <- _2 . _simDRG %%= sampleLatency srcAddrs dst simLatency
+          let future = int realNow + int delta
+          pushPMsgI future p (MsgLo (UData src msg))
+      MsgLo (UOwnAddr obs) -> do
+        void $ flip M.traverseWithKey obs $ \addr ob -> do
+          let b = case ob of
+                ObsPositive _ -> True
+                ObsNegative _ -> False
+          mapAddress addr pid b
 
 {- | React to a simulation input. -}
 simReact

@@ -41,7 +41,7 @@ import           GHC.Generics      (Generic)
 
 -- internal
 import           P4P.Proc.Internal (Direction (..))
-import           P4P.Proc.Protocol (Observations)
+import           P4P.Proc.Protocol (Observations, SockAddr)
 
 
 {- | A stream id. This is a 56-bit integer, to fit into a QUIC stream id.
@@ -89,6 +89,7 @@ See 'SMsgI' and 'SMsgO' for more details.
 -}
 class SProtocol ps where
   type Addr ps :: Type
+  type Addr ps = SockAddr
   -- | A cryptographic id that uniquely identifies an entity.
   type Pid ps :: Type
   -- | Main protocol message type, for external communication between entities.

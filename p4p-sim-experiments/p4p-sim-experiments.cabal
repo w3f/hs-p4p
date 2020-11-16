@@ -89,6 +89,7 @@ Executable sim
   Build-Depends:
       p4p-sim-experiments
     , p4p-sim
+    , p4p-rt
     , p4p-proc
     , p4p-protocol-dht-kad
     , op

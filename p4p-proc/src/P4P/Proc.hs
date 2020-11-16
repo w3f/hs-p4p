@@ -18,6 +18,7 @@ module P4P.Proc
   , reactEnv
   , Tick
   -- protocol
+  , SockAddr(..)
   , Observation(..)
   , Observations
   , UProtocol(..)

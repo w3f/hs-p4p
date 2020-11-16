@@ -15,10 +15,11 @@ import           Codec.Serialise              (Serialise (..))
 import           Control.Op
 import           Data.ByteString.Char8        (pack)
 import           Data.Dependent.Sum           (DSum (..))
-import           P4P.Proc                     (Proc)
+import           P4P.Proc                     (Proc, SockAddr (..))
 
--- external, kademlia
+-- external, protocol
 import           P4P.Protocol.DHT.Kademlia    (defaultParams, newRandomState)
+import           P4P.RT.EchoProcess           (EchoState (..))
 
 -- external, IO
 import           System.Environment           (getArgs)
@@ -26,7 +27,6 @@ import           System.Exit                  (ExitCode (..), exitWith)
 
 -- internal
 import           P4P.Sim
-import           P4P.Sim.EchoProcess          (EchoState (..))
 import           P4P.Sim.Experiments.Protocol
 import           P4P.Sim.Util                 (ChaChaDRGInsecure, PMut',
                                                getEntropy)
@@ -44,7 +44,7 @@ instance SimC' ps => SimC ps
 
 mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
 mkPState simOpts = \case
-  SEcho -> \p -> pure (EState [p] 0)
+  SEcho -> \p -> pure (EState [SockAddrInet p 0] 0)
   SKad  -> \p -> do
     let params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick procOpts
         addr   = pack $ "addr:" <> show p

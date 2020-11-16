@@ -68,6 +68,8 @@ Library
   Build-Depends:
       extra
     , binary
+    , bytestring
+    , containers
     , lens
     , mutable-lens (>= 0.3)
     , mtl
@@ -78,8 +80,6 @@ Library
     -- P4P.Proc.Util
     , smash
     , transformers
-    -- P4P.Proc.Util.FlowControl
-    , containers
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Proc

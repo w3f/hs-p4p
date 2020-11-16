@@ -12,8 +12,8 @@ import           Control.Op
 
 -- external, p4p
 import           P4P.Protocol.DHT.Kademlia (KState)
+import           P4P.RT.EchoProcess        (EchoState (..))
 import           P4P.Sim
-import           P4P.Sim.EchoProcess       (EchoState (..))
 import           P4P.Sim.Util              (ChaChaDRGInsecure)
 
 

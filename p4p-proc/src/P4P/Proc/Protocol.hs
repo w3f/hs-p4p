@@ -9,22 +9,39 @@
 module P4P.Proc.Protocol where
 
 -- external
-import qualified Data.Map.Strict   as M
-
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
+import           Data.ByteString   (ByteString)
 import           Data.Kind         (Type)
+import           Data.Map.Strict   (Map)
 import           Data.Schedule     (Tick)
+import           Data.Word
 import           GHC.Generics      (Generic)
 
 -- internal
 import           P4P.Proc.Internal
 
 
+type PortNumber = Word16
+type HostAddress = Word32
+type HostAddress6 = (Word32, Word32, Word32, Word32)
+type FlowInfo = Word32
+type ScopeID = Word32
+
+{- | Default type of address.
+
+Same as t'Network.Socket.SockAddr' but fully-strict with sane instances.
+-}
+data SockAddr =
+    SockAddrInet !PortNumber !HostAddress
+  | SockAddrInet6 !PortNumber !FlowInfo !HostAddress6 !ScopeID
+  | SockAddrUnix !ByteString
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+
 data Observation t = ObsPositive !t | ObsNegative !t
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-type Observations a = M.Map a (Observation Tick)
+type Observations a = Map a (Observation Tick)
 
 {- | Protocol sending unordered unreliable datagrams, the simplest protocol.
 
@@ -45,6 +62,7 @@ class UProtocol ps where
   Depending on the protocol, this may or may not uniquely identify the entity.
   -}
   type Addr ps :: Type
+  type Addr ps = SockAddr
   -- | Main protocol message type, for external communication between entities.
   type Msg ps :: Type
 
