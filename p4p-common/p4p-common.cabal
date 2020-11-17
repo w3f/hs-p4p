@@ -66,8 +66,7 @@ Common executable
 Library
   Import: generic
   Build-Depends:
-      extra
-    , binary
+      binary
     , lens
     , mutable-lens
     , serialise
@@ -92,7 +91,6 @@ Library
     , vector
   HS-Source-Dirs: src
   Exposed-Modules:
-    Control.Concurrent.Async.Extra
     Control.Lens.Extra
     Control.Lens.Strict
     Control.Lens.Mutable.Extra

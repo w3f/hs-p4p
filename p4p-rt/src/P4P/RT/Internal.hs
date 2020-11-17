@@ -18,8 +18,7 @@ import qualified Data.ByteString.Lazy.Char8     as LBS
 
 import           Codec.Serialise                (Serialise (..), serialise)
 import           Control.Clock                  (Clocked (..))
-import           Control.Monad                  (forever, join, unless, void,
-                                                 when)
+import           Control.Monad                  (forever, unless, void, when)
 import           Control.Monad.Extra            (whenJust)
 import           Control.Op
 import           Data.Binary                    (Binary)
@@ -37,11 +36,11 @@ import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
                                                  ProcIface (..), Tick)
 
 -- external, impure
-import           Control.Clock.IO               (Intv (..), clockWithIO,
+import           Control.Clock.IO               (Intv (..), clockWithIOs,
                                                  interval, newClock)
+import           Control.Clock.IO.Internal      (foreverInterleave)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
                                                  wait)
-import           Control.Concurrent.Async.Extra (foreverInterleave)
 import           Control.Concurrent.STM         (STM, atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
@@ -161,12 +160,15 @@ defaultLog f tFmt h t evt = when (f evt) $ do
 -- | A type for the runtime to receive input and send output, to a client.
 type RTHiIO ps = (IO (Maybe (HiI ps)), [HiO ps] -> IO ())
 
+-- | A type for the runtime to receive input and send output, to the network.
+type RTLoIO ps = (IO (Maybe (LoI ps)), [LoO ps] -> IO ())
+
 -- | Convert a 'runClocked' input to 'GMsgI' format, with 'Nothing' (EOF)
 -- lifted to the top of the ADT structure.
-c2i :: Either Tick (Maybe x) -> Maybe (GMsgI Tick v x)
-c2i (Right Nothing ) = Nothing
-c2i (Left  t       ) = Just (MsgEnv t)
-c2i (Right (Just a)) = Just (MsgHi a)
+c2i :: Either Tick (Either l h) -> GMsgI Tick l h
+c2i (Left  t        ) = MsgEnv t
+c2i (Right (Left  l)) = MsgLo l
+c2i (Right (Right h)) = MsgHi h
 
 defaultRTWouldInteract :: RTOptions -> Bool
 defaultRTWouldInteract opt =
@@ -187,13 +189,16 @@ defaultRT
   => RTOptions
   -> Tick
   -> Maybe (PMsgO ps -> Bool)
+  -> RTLoIO ps
   -> RTHiIO ps
   -> ProcIAction Handle
   -> ProcOAction Handle
   -> IO (RTEnv ps IO)
-defaultRT opt initTick logFilter' (rtHiI, rtHiO) procIMsg procOMsg = do
-  let picosPerMs   = 1000000000
-      picosPerTick = rtMsTick * picosPerMs
+defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
+  let (rtLoI, rtLoO) = rtLoIO
+      (rtHiI, rtHiO) = rtHiIO
+      picosPerMs     = 1000000000
+      picosPerTick   = rtMsTick * picosPerMs
 
   rtLog <- case logFilter' of
     Nothing -> pure (\_ _ -> pure ())
@@ -202,10 +207,13 @@ defaultRT opt initTick logFilter' (rtHiI, rtHiO) procIMsg procOMsg = do
         >$> defaultLog @(PMsgO ps) logFilter rtLogTimeFmt
 
   (rtI, rtIClose) <- case procIActRead procIMsg of
+    -- use rtLoI / rtHiI only if we're not reading input
     Nothing -> do
       rtClock     <- newClock initTick (interval picosPerTick Ps)
-      Clocked r f <- clockWithIO rtClock rtHiI
-      pure $ (r >$> c2i, f)
+      Clocked r f <- clockWithIOs
+        rtClock
+        [(Left <$>) <$> rtLoI, (Right <$>) <$> rtHiI]
+      pure $ ((c2i <$>) <$> r, f)
     Just h -> do
       s <- newLBStream h
       let input = deserialiseOrEOF "procIMsg read" s
@@ -234,8 +242,12 @@ defaultRT opt initTick logFilter' (rtHiI, rtHiO) procIMsg procOMsg = do
       MsgLo  l -> Just $ MsgLo l
       MsgHi  h -> Just $ MsgHi h
 
-    onlyUser = \case
-      MsgHi uo -> Just uo
+    onlyHi = \case
+      MsgHi ho -> Just ho
+      _        -> Nothing
+
+    onlyLo = \case
+      MsgLo lo -> Just lo
       _        -> Nothing
 
     rtRunO t outs = do
@@ -246,14 +258,18 @@ defaultRT opt initTick logFilter' (rtHiI, rtHiO) procIMsg procOMsg = do
         whenJust (procOActWrite procOMsg) $ flip LBS.hPut om
         whenJust (procOActCompare procOMsg) $ compareOMsg rtError t (Just om)
 
-      -- send all the outs to rtHiO in one batch
-      -- this allows it to perform flow control more pro-actively, since it now
-      -- receives a signal when 'reactM' outputs []
       case procOActWrite procOMsg of
-        Nothing -> rtHiO $ mapMaybe onlyUser outs
-        Just _  -> case procIActRead procIMsg of
-          Nothing -> rtHiO $ mapMaybe onlyUser outs -- echo back
-          Just _  -> pure ()
+        -- use rtLoO / rtHiO only if we're not writing output
+        Nothing -> do
+          -- send all the relevant outs in one batch
+          -- this allows the other component to perform flow control more
+          -- pro-actively, since they now receive a signal on []
+          rtHiO $ mapMaybe onlyHi outs
+          rtLoO $ mapMaybe onlyLo outs
+        -- additionally, if we have interactive input, then echo back the output
+        Just _ | defaultRTWouldInteract opt -> do
+          rtHiO $ mapMaybe onlyHi outs
+        _ -> pure ()
 
   pure RTEnv { .. }
   where RTOptions {..} = opt
@@ -279,9 +295,10 @@ runProcIO
   -> IO ps
   -> (ps -> Tick)
   -> Maybe (PMsgO ps -> Bool)
+  -> RTLoIO ps
   -> (Bool -> IO (Bool, RTHiIO ps))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO runReact procOpt mkNewState getNow logFilter mkRTHiIO =
+runProcIO runReact procOpt mkNewState getNow logFilter rtLoIO mkRTHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
     --print opt
     (new, ifs) <- case procIActRead procIState of
@@ -295,38 +312,40 @@ runProcIO runReact procOpt mkNewState getNow logFilter mkRTHiIO =
 
     (isInteractive, rtHiIO) <- mkRTHiIO new
     {-
-      TODO: this is a hack that prevents ctrl-c from quitting the program in
-      interactive mode, similar to the behaviour of other REPLs. Without this, it
-      is possible for ctrl-c to quit the program if the user is quick and gives
-      the signal *in between* calls to libreadline [1], since we only ignore
-      Interrupt during those calls when it is interrupted.
+    TODO: this is a hack that prevents ctrl-c from quitting the program in
+    interactive mode, similar to the behaviour of other REPLs. Without this, it
+    is possible for ctrl-c to quit the program if the user is quick and gives
+    the signal *in between* calls to libreadline [1], since we only ignore
+    Interrupt during those calls when it is interrupted.
 
-      However the way this is implemented is a bit shitty, as it prevents a user
-      from aborting an computation in interactive mode. (This is possible in
-      other REPLs). Not that this matters for a network simulator where things
-      are IO-bound not CPU-bound, but ideally we'd abort the current computation
-      and rewind the state back to the end of the previous computation. That's
-      hard since we support fake-pure impure 'Process' (we'd have to @suspend@
-      and @proceed@ in between every input, for all processes being simulated),
-      but would be easy if we only supported 'Proc'.
+    However the way this is implemented is a bit shitty, as it prevents a user
+    from aborting an computation in interactive mode. (This is possible in
+    other REPLs). Not that this matters for a network simulator where things
+    are IO-bound not CPU-bound, but ideally we'd abort the current computation
+    and rewind the state back to the end of the previous computation. That's
+    hard since we support fake-pure impure 'Process' (we'd have to @suspend@
+    and @proceed@ in between every input, for all processes being simulated),
+    but would be easy if we only supported 'Proc'.
 
-      In non-interactive mode, nothing is changed and the user can abort whenever
-      they want, as expected. This exits the program so we don't need to worry
-      about restoring previous state, etc.
+    In non-interactive mode, nothing is changed and the user can abort whenever
+    they want, as expected. This exits the program so we don't need to worry
+    about restoring previous state, etc.
 
-      [1] With the new haskeline integration, this seems not to happen *in
-      practise* (you need to rm mask below to test it) although in theory it
-      should, perhaps the haskeline event loop is tighter than our old hacky
-      readline event loop... If we are convinced this will never be a problem, we
-      could drop the whole guard mechanism.
-      -}
+    [1] With the new haskeline integration, this seems not to happen *in
+    practise* (you need to rm mask below to test it) although in theory it
+    should, perhaps the haskeline event loop is tighter than our old hacky
+    readline event loop... If we are convinced this will never be a problem, we
+    could drop the whole guard mechanism.
+    -}
     let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
         guard act = if isInteractive && defaultRTWouldInteract procOpt
           then mask $ \_ -> act id -- guard masks, unguard doesn't restore
           else act id -- guard does nothing, no mask to restore
 
-    let realNow = getNow ifs
-        mkRT = defaultRT @ps procOpt realNow logFilter rtHiIO procIMsg procOMsg
+    let
+      realNow = getNow ifs
+      mkRT =
+        defaultRT @ps procOpt realNow logFilter rtLoIO rtHiIO procIMsg procOMsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
       let env = ProcEnv guard rtRunI rtRunO
       ofs <- runReact env ifs
@@ -448,9 +467,9 @@ after consuming any outstanding unconsumed inputs.
 combineRTHiIO :: [RTHiIO ps] -> IO (RTHiIO ps, IO ())
 combineRTHiIO ios = do
   let (is, os) = unzip ios
-  (i, close) <- foreverInterleave is
+  (i, close) <- foreverInterleave (const (pure True)) is
   let o x = for_ os ($ x)
-  pure ((join <$> i, o), close)
+  pure ((i, o), close)
 
 newRTAsync
   :: forall ps

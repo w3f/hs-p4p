@@ -21,6 +21,7 @@ import           Control.Monad.Extra            (untilJustM)
 import           Data.Foldable                  (traverse_)
 import           Data.Kind                      (Constraint, Type)
 import           Data.List.NonEmpty             (NonEmpty)
+import           Data.Void                      (absurd)
 import           P4P.Proc                       (GMsg (..), GMsgO, PMsgI, PMsgO,
                                                  ProcEnv (..), ProcIface (..),
                                                  Process (..), Tick,
@@ -28,6 +29,7 @@ import           P4P.Proc                       (GMsg (..), GMsgO, PMsgI, PMsgO,
 import           Text.Read                      (readEither)
 
 -- external, IO
+import           Control.Clock.IO               (voidInput)
 import           Control.Concurrent.Async       (race)
 import           Control.Concurrent.STM         (atomically)
 import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
@@ -128,6 +130,7 @@ grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
                                   mkNewState
                                   getNow
                                   logFilter
+                                  (Just <$> voidInput, traverse_ absurd)
                                   mkSimUserIO
  where
   SimOptions {..} = opt
