@@ -42,12 +42,12 @@ import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (catMaybes)
 import           Data.Schedule                    (Tick, TickDelta)
 import           Data.Traversable                 (for)
-import           P4P.Proc                         (GMsg (..), Observation (..),
-                                                   ProcAddr, ProcEnv (..),
-                                                   ProcIface (..), ProcMsgI,
-                                                   Process (..), UMsg (..),
-                                                   UPMsgI, UPMsgO, UProtocol,
-                                                   asState, reactEnv)
+import           P4P.Proc                         (GMsg (..), ProcAddr,
+                                                   ProcEnv (..), ProcIface (..),
+                                                   ProcMsgI, Process (..),
+                                                   UMsg (..), UPMsgI, UPMsgO,
+                                                   UProtocol, envReactProcess',
+                                                   liftEnv, obsIsPositive)
 import           Safe                             (headNote)
 
 -- internal
@@ -209,10 +209,7 @@ procInput realNow pid proc msgI = do
           pushPMsgI future p (MsgLo (UData src msg))
       MsgLo (UOwnAddr obs) -> do
         void $ flip M.traverseWithKey obs $ \addr ob -> do
-          let b = case ob of
-                ObsPositive _ -> True
-                ObsNegative _ -> False
-          mapAddress addr pid b
+          mapAddress addr pid (obsIsPositive ob)
 
 {- | React to a simulation input. -}
 simReact
@@ -341,34 +338,6 @@ simNowM
   => Ctx (PSim ref st p) m => PSim ref st p -> m Tick
 simNowM (PSim r) = use $ asLens r . _2 . _simNow
 
--- note: @p@ here refers to the process type of the whole simulation, not the
--- individual processes being simulated
-simulate
-  :: forall p m i
-   . (Process p, Monad m, Ctx p m)
-  => (p -> m i)
-  -> ProcEnv i (State p) m
-  -> State p
-  -> m (State p)
-simulate procInfo env = fmap snd . asState (reactEnv @p procInfo env)
-
-liftEnv
-  :: forall i ps st m . Monad m => ProcEnv i ps m -> ProcEnv i ps (StateT st m)
-liftEnv env = ProcEnv { envGuard = guard
-                      , envI     = lift envI
-                      , envO     = (lift .) . envO
-                      }
- where
-  ProcEnv {..} = env
-  -- from https://hackage.haskell.org/package/exceptions-0.10.4/docs/src/Control.Monad.Catch.html#line-428
-  guard
-    :: ((forall a . StateT s m a -> StateT s m a) -> StateT s m b)
-    -> StateT s m b
-  guard a = StateT $ \s -> envGuard $ \u -> runStateT (a $ q u) s
-   where
-    q :: (m (a, s) -> m (a, s)) -> StateT s m a -> StateT s m a
-    q u (StateT b) = StateT (u . b)
-
 -- note: @p@ here does refer to the process type of individual processes
 runSim
   :: forall p m
@@ -379,7 +348,8 @@ runSim
   -> SimFullState (State p) ()
   -> m (SimFullState (State p) ())
 runSim env s0 =
-  simulate @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p) simNowM
-                                                             (liftEnv env)
-                                                             s0
+  envReactProcess' @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p)
+      simNowM
+      (liftEnv env)
+      s0
     `evalStateT` newFakeAlloc1

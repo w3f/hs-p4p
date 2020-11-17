@@ -14,7 +14,7 @@ import           Control.Lens.TH.Extra (makeLenses_)
 import           Control.Op
 import           GHC.Generics          (Generic)
 import           Options.Applicative
-import           P4P.RT.Options
+import           P4P.RT.Options        hiding (RTLogging (..))
 import           Text.Read             (readEither)
 
 -- internal
@@ -62,21 +62,11 @@ data SimLogging =
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 makeLenses_ ''SimLogging
 
-loggerFromInt :: Int -> SimLogging
-loggerFromInt i | i > 2     = LogAll
-                | i == 2    = LogAllNoUser
-                | i == 1    = LogAllNoUserTicks
-                | otherwise = LogNone
-
-loggerFromIntStrDesc :: String
-loggerFromIntStrDesc = "0 -> LogNone, 1 -> LogAllNoTicks, 2+ -> LogAll."
-
 data SimOptions = SimOptions
   { simInitNodes    :: !Int
   , simInitLatency  :: !SimLatency
   -- :^ initial execution config, ignored during replay since it is read
-  , simLogging      :: !SimLogging
-  , simRTOptions    :: !RTOptions
+  , simRTOptions    :: !(RTOptions SimLogging)
   , simDbgEmptySimX :: !Bool
   -- :^ debugging options
   }
@@ -85,6 +75,38 @@ makeLenses_ ''SimOptions
 
 knownDistPosReader :: ReadM KnownDistPos
 knownDistPosReader = eitherReader $ readEither >=> distPosToInternal
+
+simLoggingOptions :: Parser SimLogging
+simLoggingOptions =
+  (  option auto
+    <| long "logging"
+    <> metavar "Logger"
+    <> help ("Logging profile, " <> showOptions @SimLogging)
+    <> completeWith (show <$> allOptions @SimLogging)
+    <> value LogNone
+    <> showDefault
+    )
+    <|> (   loggerFromInt
+        <$< length
+        <$< many
+        <|  flag' ()
+        <|  short 'v'
+        <>  help
+              (  "Logging profile, occurence-counted flag. "
+              <> loggerFromIntStrDesc
+              )
+        )
+ where
+  loggerFromInt :: Int -> SimLogging
+  loggerFromInt i | i > 2     = LogAll
+                  | i == 2    = LogAllNoUser
+                  | i == 1    = LogAllNoUserTicks
+                  | otherwise = LogNone
+
+  loggerFromIntStrDesc :: String
+  loggerFromIntStrDesc =
+    "0 -> LogNone, 1 -> LogAllNoTicks, 2 -> LogAllNoUser, 3+ -> LogAll."
+
 
 simOptions :: Parser SimOptions
 simOptions =
@@ -108,33 +130,14 @@ simOptions =
         <>  showDefault
         )
 
-    <*> (   (  option auto
-            <| long "logging"
-            <> metavar "Logger"
-            <> help ("Logging profile, " <> showOptions @SimLogging)
-            <> completeWith (show <$> allOptions @SimLogging)
-            <> value LogNone
-            <> showDefault
-            )
-        <|> (   loggerFromInt
-            <$< length
-            <$< many
-            <|  flag' ()
-            <|  short 'v'
-            <>  help
-                  (  "Logging profile, occurence-counted flag. "
-                  <> loggerFromIntStrDesc
-                  )
-            )
-        )
-
-    <*> procOptions
+    <*> rtOptions simLoggingOptions
 
     <*> (  switch
         <| long "dbg-empty-sim-x"
         <> help "For testing p4p-sim itself: use an empty extension"
         <> showDefault
         )
+
 
 data SimXOptions xo = SimXOptions
   { simOpts  :: !SimOptions
@@ -145,15 +148,3 @@ makeLenses_ ''SimXOptions
 
 simXOptions :: Parser xo -> Parser (SimXOptions xo)
 simXOptions xopts = SimXOptions <$> simOptions <*> xopts
-
-mkParser :: String -> String -> Parser opt -> ParserInfo opt
-mkParser summary desc parser = info
-  (helper <*> parser)
-  (fullDesc <> header summary <> progDesc desc <> failureCode 2)
-
-parseArgsIO :: ParserInfo opt -> [String] -> IO opt
-parseArgsIO parser args =
-  execParserPure defaultPrefs parser args |> handleParseResult
-
-parseArgsIO' :: String -> String -> Parser opt -> [String] -> IO opt
-parseArgsIO' title desc parseOpt = parseArgsIO $ mkParser title desc parseOpt

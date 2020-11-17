@@ -9,6 +9,8 @@ module P4P.RT
   , RTError(..)
   , RTHiIO
   , runProcIO
+  , runProcIO'
+  , defaultRTLogging
   , handleRTResult
   , convertProcData
   , XTHiM
@@ -17,7 +19,11 @@ module P4P.RT
   , newRTAsync
   -- client
   , StdIO
-  , bracketHEF
+  , defaultRTHiIO
+  , defaultRTHiIO'
+  , KV(..)
+  , bracket2
+  , onExceptionShow
   , optionTerminalStdIO
   )
 where

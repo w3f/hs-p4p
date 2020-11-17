@@ -1,24 +1,23 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 
-module P4P.RT.Client
-  ( StdIO
-  , onExceptionShow
-  , bracketHEF
-  , maybeTerminalStdIO
-  , optionTerminalStdIO
-  )
-where
+module P4P.RT.Client where
 
 -- external
-import           Control.Monad.Extra              (unless, whenJust)
+import           Control.Monad.Extra              (unless, untilJustM, whenJust)
+import           Data.Foldable                    (traverse_)
+import           GHC.Generics                     (Generic)
+import           P4P.Proc                         (ProcIface (..))
+import           Text.Read                        (readEither)
 
 -- external, IO & system
-import qualified Control.Exception                as E
-
-import           Control.Monad.Catch              (MonadMask, bracketOnError,
-                                                   handle)
+import           Control.Monad.Catch              (MonadMask, bracket, handle,
+                                                   onException)
 import           Control.Monad.IO.Class           (MonadIO)
 import           System.Console.Haskeline         (InputT, Interrupt (..),
                                                    Settings (..),
@@ -32,14 +31,14 @@ import           System.Console.Haskeline.IO      (cancelInput, initializeInput,
 import           System.Directory                 (XdgDirectory (..),
                                                    createDirectoryIfMissing,
                                                    getXdgDirectory)
-import           System.IO                        (Handle, hGetLine, hPutStrLn,
-                                                   stderr, stdin)
+import           System.IO                        (Handle, hGetLine, stdin)
 import           System.IO.Error                  (catchIOError, isEOFError)
 import           System.Posix.IO                  (stdInput)
 import           System.Posix.Terminal            (queryTerminal)
 
 -- internal
-import           P4P.RT.Internal                  (defaultRTWouldInteract)
+import           P4P.RT.Internal                  (RTHiIO,
+                                                   defaultRTWouldInteract)
 import           P4P.RT.Options                   (RTOptions)
 
 
@@ -53,19 +52,41 @@ hGetLineOrEOF h = catchIOError
 defaultStdIO :: StdIO
 defaultStdIO = (hGetLineOrEOF stdin, putStrLn)
 
-onExceptionShow :: String -> IO a -> IO a
-onExceptionShow tag io = E.catch
-  io
-  (\e -> hPutStrLn stderr (tag <> ": " <> show e)
-    >> E.throwIO (e :: E.SomeException)
-  )
+defaultRTHiIO
+  :: Read (HiI ps)
+  => Show (HiO ps)
+  => (String -> IO (Either e (HiI ps)))
+  -> (HiO ps -> IO (Maybe String))
+  -> StdIO
+  -> RTHiIO ps
+defaultRTHiIO readCustom showCustom (getInput, doOutput) =
+  let i = untilJustM $ getInput >>= \case
+        Nothing -> pure (Just Nothing) -- EOF, quit
+        Just s  -> if null s
+          then pure Nothing
+          else readCustom s >>= \case
+            Right r -> pure (Just (Just r))
+            Left  _ -> case readEither s of
+              Right r -> pure (Just (Just r))
+              Left  e -> doOutput e >> pure Nothing
+                -- TODO: add some help text, ideally with some introspection
+                -- that prints out some generated concrete examples
+      o x = showCustom x >>= \case
+        Just r  -> doOutput r
+        Nothing -> doOutput $ show x
+  in  (i, traverse_ o)
 
-bracketHEF :: IO (h, IO (), IO ()) -> (h -> IO a) -> IO a
-bracketHEF mkHandles action = do
-  bracketOnError mkHandles (\(_, e, _) -> e) $ \(h, _, f) -> do
-    r <- action h
-    f
-    pure r
+defaultRTHiIO'
+  :: forall ps . Read (HiI ps) => Show (HiO ps) => StdIO -> RTHiIO ps
+defaultRTHiIO' =
+  defaultRTHiIO @ps (const (pure (Left ()))) (const (pure Nothing))
+
+-- | A pair that is slightly easier to type
+data KV k v = !k :~ !v
+  deriving (Eq, Ord, Show, Read, Generic)
+
+bracket2 :: IO (h, IO ()) -> (h -> IO a) -> IO a
+bracket2 mkHandles action = bracket mkHandles snd (action . fst)
 
 tryAction :: (MonadIO m, MonadMask m) => InputT m a -> InputT m a
 tryAction action = withInterrupt loop
@@ -74,7 +95,7 @@ tryAction action = withInterrupt loop
 
 -- | Set up a nice prompt if on a terminal, otherwise 'defaultStdIO'.
 maybeTerminalStdIO
-  :: Bool -> String -> String -> String -> IO ((Bool, StdIO), IO (), IO ())
+  :: Bool -> String -> String -> String -> IO ((Bool, StdIO), IO ())
 maybeTerminalStdIO interactive dirname filename prompt = do
   queryTerminal stdInput >>= \case
     True | interactive -> do
@@ -88,7 +109,7 @@ maybeTerminalStdIO interactive dirname filename prompt = do
           -- `queryInput hd x` actually runs `x` in a separate thread, so when
           -- this thread receives an exception, we want to cancel that thread
           -- using `cancelInput`
-          i = flip E.onException e $ queryInput hd $ tryAction $ do
+          i = flip onException e $ queryInput hd $ tryAction $ do
             s <- getInputLine prompt
             whenJust s $ \s' -> unless (null s') $ do
               modifyHistory (addHistoryUnlessConsecutiveDupe s')
@@ -98,11 +119,10 @@ maybeTerminalStdIO interactive dirname filename prompt = do
           -- an exception is thrown there, `closeInput hd` would deadlock. This
           -- gets broken by GHC RTS but it still looks bad. If `queryInput`
           -- completes with no exception then the cleanup is redundant anyway.
-          f = pure ()
       o <- queryInput hd getExternalPrint
-      pure ((True, (i, o)), e, f)
-    _ -> pure ((False, defaultStdIO), pure (), pure ())
+      pure ((True, (i, o)), e)
+    _ -> pure ((False, defaultStdIO), pure ())
 
 optionTerminalStdIO
-  :: RTOptions -> String -> String -> String -> IO ((Bool, StdIO), IO (), IO ())
+  :: RTOptions log -> String -> String -> String -> IO ((Bool, StdIO), IO ())
 optionTerminalStdIO opt = maybeTerminalStdIO (defaultRTWouldInteract opt)

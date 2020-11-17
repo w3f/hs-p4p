@@ -22,6 +22,8 @@ Abstractions
 Technical debt
 ==============
 
+- FIXME in defaultRT re rtLoIO/rtHiIO instantiation
+- RT logging should log (certain) inputs as well as outputs
 - update crypto interface
 
 

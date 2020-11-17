@@ -28,14 +28,18 @@ import           Data.Kind                      (Constraint, Type)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
 import           Data.Maybe                     (mapMaybe)
+import           Data.Schedule                  (HasNow (..))
 import           Data.Traversable               (for)
 import           Data.Void                      (Void)
 import           GHC.Generics                   (Generic)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
-                                                 PMsgO, PMsgO', ProcEnv (..),
-                                                 ProcIface (..), Tick)
+                                                 PMsgO, PMsgO', Proc,
+                                                 ProcEnv (..), ProcIface (..),
+                                                 Tick, envReactProc)
 
 -- external, impure
+import qualified Control.Exception              as E
+
 import           Control.Clock.IO               (Intv (..), clockWithIOs,
                                                  interval, newClock)
 import           Control.Clock.IO.Internal      (foreverInterleave)
@@ -63,6 +67,13 @@ import           UnliftIO.Exception             (bracket, mask, throwIO)
 import           P4P.RT.Internal.Serialise
 import           P4P.RT.Options
 
+
+onExceptionShow :: String -> IO a -> IO a
+onExceptionShow tag io = E.catch
+  io
+  (\e -> hPutStrLn stderr (tag <> ": " <> show e)
+    >> E.throwIO (e :: E.SomeException)
+  )
 
 mkHandle :: IOMode -> Either CInt FilePath -> IO Handle
 mkHandle mode fdOrFile = do
@@ -170,14 +181,14 @@ c2i (Left  t        ) = MsgEnv t
 c2i (Right (Left  l)) = MsgLo l
 c2i (Right (Right h)) = MsgHi h
 
-defaultRTWouldInteract :: RTOptions -> Bool
+defaultRTWouldInteract :: RTOptions log -> Bool
 defaultRTWouldInteract opt =
   case procIActRead (procIMsg (rtProcIOAction opt)) of
     Nothing -> True
     Just _  -> False
 
 defaultRT
-  :: forall ps
+  :: forall ps log
    . EnvI ps ~ Tick
   => Show (AuxO ps)
   => Show (LoO ps)
@@ -186,7 +197,7 @@ defaultRT
   => Serialise (LoO ps)
   => Serialise (HiI ps)
   => Serialise (HiO ps)
-  => RTOptions
+  => RTOptions log
   -> Tick
   -> Maybe (PMsgO ps -> Bool)
   -> RTLoIO ps
@@ -209,6 +220,9 @@ defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
   (rtI, rtIClose) <- case procIActRead procIMsg of
     -- use rtLoI / rtHiI only if we're not reading input
     Nothing -> do
+      -- FIXME: this needs a bit of re-architecting: actually we want to
+      -- create rtLoIO / rtHiIO only if we're not reading input, and
+      -- additionally they want access to the clock!!!
       rtClock     <- newClock initTick (interval picosPerTick Ps)
       Clocked r f <- clockWithIOs
         rtClock
@@ -284,21 +298,21 @@ type ProcReRe (codec :: Type -> Constraint) ps
     )
 
 runProcIO
-  :: forall ps
-   . EnvI ps ~ Tick
+  :: forall ps log
+   . HasNow ps
+  => EnvI ps ~ Tick
   => Show (AuxO ps)
   => Show (LoO ps)
   => Show (HiO ps)
   => ProcReRe Serialise ps
   => (ProcEnv Tick ps IO -> ps -> IO ps)
-  -> RTOptions
+  -> RTOptions log
   -> IO ps
-  -> (ps -> Tick)
   -> Maybe (PMsgO ps -> Bool)
   -> RTLoIO ps
   -> (Bool -> IO (Bool, RTHiIO ps))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO runReact procOpt mkNewState getNow logFilter rtLoIO mkRTHiIO =
+runProcIO envReact opt mkNewState logFilter rtLoIO mkRTHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
     --print opt
     (new, ifs) <- case procIActRead procIState of
@@ -338,20 +352,20 @@ runProcIO runReact procOpt mkNewState getNow logFilter rtLoIO mkRTHiIO =
     could drop the whole guard mechanism.
     -}
     let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
-        guard act = if isInteractive && defaultRTWouldInteract procOpt
+        guard act = if isInteractive && defaultRTWouldInteract opt
           then mask $ \_ -> act id -- guard masks, unguard doesn't restore
           else act id -- guard does nothing, no mask to restore
 
-    let
-      realNow = getNow ifs
-      mkRT =
-        defaultRT @ps procOpt realNow logFilter rtLoIO rtHiIO procIMsg procOMsg
+    let (imsg, omsg) = (procIMsg, procOMsg)
+        initTick = getNow ifs
+        mkRT = defaultRT @ps opt initTick logFilter rtLoIO rtHiIO imsg omsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
       let env = ProcEnv guard rtRunI rtRunO
-      ofs <- runReact env ifs
+      ofs <- onExceptionShow "envReact" $ envReact env ifs
+      let lastTick = getNow ofs
 
-      let t = getNow ofs
-      whenJust (procOActCompare procOMsg) $ compareOMsg rtError t Nothing
+      whenJust (procOActCompare procOMsg) $ do
+        compareOMsg rtError lastTick Nothing
 
       let os = serialise ofs
       whenJust (procOActWrite procOState) $ flip LBS.hPut os
@@ -359,10 +373,39 @@ runProcIO runReact procOpt mkNewState getNow logFilter rtLoIO mkRTHiIO =
         rethrow (\e -> annotateIOError e "procOState" Nothing Nothing) $ do
           os' <- LBS.hGetContents h
           when (os /= os') $ do
-            rtError $ RTFailedReplayCompare "procOState" t os' os
+            rtError $ RTFailedReplayCompare "procOState" lastTick os' os
 
       rtStatus
-  where RTOptions {..} = procOpt
+  where RTOptions {..} = opt
+
+runProcIO'
+  :: forall ps log
+   . Proc ps
+  => HasNow ps
+  => EnvI ps ~ Tick
+  => Show (AuxO ps)
+  => Show (LoO ps)
+  => Show (HiO ps)
+  => ProcReRe Serialise ps
+  => RTOptions log
+  -> IO ps
+  -> Maybe (PMsgO ps -> Bool)
+  -> RTLoIO ps
+  -> (Bool -> IO (Bool, RTHiIO ps))
+  -> IO (Either (NonEmpty RTError) ())
+runProcIO' = runProcIO @ps (envReactProc @ps (pure . getNow))
+
+defaultRTLogging :: RTOptions RTLogging -> Maybe (GMsgO e l h -> Bool)
+defaultRTLogging opt = case rtLogging opt of
+  LogNone -> Nothing
+  LogLo   -> Just $ \case
+    MsgLo _ -> True
+    _       -> False
+  LogLoHi -> Just $ \case
+    MsgLo _ -> True
+    MsgHi _ -> True
+    _       -> False
+  LogLoHiEnv -> Just $ const True
 
 handleRTResult :: Either (NonEmpty RTError) () -> IO ExitCode
 handleRTResult = \case
@@ -476,9 +519,9 @@ newRTAsync
    . Maybe (HiO ps -> IO ())
   -> (RTHiIO ps -> IO (Either (NonEmpty RTError) ()))
   -> IO (RTAsync ps)
-newRTAsync maybeEat runProcIO' = do
+newRTAsync maybeEat runProcIO_ = do
   ((rtWI, rtRO), rtHiIO) <- tbQueueHiIO @ps
-  aMain                  <- async $ runProcIO' rtHiIO
+  aMain                  <- async $ runProcIO_ rtHiIO
   link aMain
   rtCancel <- case maybeEat of
     Nothing  -> pure (cancel aMain)

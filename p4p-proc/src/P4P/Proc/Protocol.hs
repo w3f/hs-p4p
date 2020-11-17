@@ -3,15 +3,20 @@
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE EmptyDataDeriving #-}
 {-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE TypeFamilies      #-}
 
 module P4P.Proc.Protocol where
 
 -- external
+import qualified Data.Map.Strict   as M
+
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
 import           Data.ByteString   (ByteString)
+import           Data.Function     (on)
 import           Data.Kind         (Type)
 import           Data.Map.Strict   (Map)
 import           Data.Schedule     (Tick)
@@ -39,9 +44,33 @@ data SockAddr =
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 data Observation t = ObsPositive !t | ObsNegative !t
- deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+ deriving (Eq, Show, Read, Generic, Binary, Serialise)
+
+obsToPair :: Observation t -> (t, Bool)
+obsToPair = \case
+  ObsPositive t -> (t, True)
+  ObsNegative t -> (t, False)
+
+instance Ord t => Ord (Observation t) where
+  compare = compare `on` obsToPair
+
+obsIsPositive :: Observation a -> Bool
+obsIsPositive = \case
+  ObsPositive _ -> True
+  ObsNegative _ -> False
+
+obsIsNegative :: Observation a -> Bool
+obsIsNegative = \case
+  ObsPositive _ -> False
+  ObsNegative _ -> True
 
 type Observations a = Map a (Observation Tick)
+
+obsPositiveFromList :: Ord a => Tick -> [a] -> Observations a
+obsPositiveFromList tick addrs = M.fromList $ (, ObsPositive tick) <$> addrs
+
+updateTrustedObs :: Ord a => Observations a -> Observations a -> Observations a
+updateTrustedObs = M.unionWith max
 
 {- | Protocol sending unordered unreliable datagrams, the simplest protocol.
 

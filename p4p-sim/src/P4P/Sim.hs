@@ -3,8 +3,7 @@
 module P4P.Sim
   (
   -- * Main definitions
-    KV(..)
-  , Pid
+    Pid
   , SimHiI'(..)
   , SimHiI
   , SimHiO'(..)
@@ -18,7 +17,6 @@ module P4P.Sim
   , newSimState
   , SimT
   , SimProcess
-  , simulate
   , runSim
   -- * Extensions
   , SimXProcIface(..)
@@ -28,9 +26,6 @@ module P4P.Sim
   , SimXOptions(..)
   , SimOptions(..)
   , _simRTOptions
-  , mkParser
-  , parseArgsIO
-  , parseArgsIO'
   , simXOptions
   , simOptions
   , module Options.Applicative
@@ -49,9 +44,10 @@ module P4P.Sim
   , convertProcData
   , RTAsync(..)
   , newRTAsync
-  , bracketHEF
+  , bracket2
   , hookAutoJoinQuit
   , optionTerminalStdIO
+  , KV(..)
   )
 where
 

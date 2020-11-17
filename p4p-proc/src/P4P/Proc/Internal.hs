@@ -1,11 +1,12 @@
-{-# LANGUAGE DataKinds         #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveAnyClass    #-}
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE RankNTypes        #-}
-{-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE DefaultSignatures   #-}
+{-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies        #-}
 
 -- GHC bug, default implementations for a class includes subclass constraint
 -- https://gitlab.haskell.org/ghc/ghc/issues/18259
@@ -14,15 +15,18 @@
 module P4P.Proc.Internal where
 
 -- external
-import           Codec.Serialise     (Serialise)
-import           Control.Monad       (join, void)
-import           Control.Monad.Extra (whileJustM)
+import           Codec.Serialise                  (Serialise)
+import           Control.Monad                    (join, void)
+import           Control.Monad.Extra              (whileJustM)
+import           Control.Monad.Trans.Class        (MonadTrans (..))
+import           Control.Monad.Trans.State.Strict (StateT (..), execStateT, get,
+                                                   state)
 import           Control.Op
-import           Data.Binary         (Binary)
-import           Data.Kind           (Constraint, Type)
-import           Data.Schedule       (Tick)
-import           Data.Void           (Void)
-import           GHC.Generics        (Generic)
+import           Data.Binary                      (Binary)
+import           Data.Kind                        (Constraint, Type)
+import           Data.Schedule                    (Tick)
+import           Data.Void                        (Void)
+import           GHC.Generics                     (Generic)
 
 
 data Direction = Incoming | Outgoing
@@ -206,7 +210,7 @@ asState runProcess pstate = do
   s <- suspend p
   pure (r, s)
 
--- | Simple model of a process environment, for 'reactEnv'.
+-- | Simple model of a process environment, for 'envReactProc' et. al.
 data ProcEnv i ps m = ProcEnv
   { envGuard :: !(forall b. ((forall a. m a -> m a) -> m b) -> m b)
   -- ^ Custom guard function, e.g. 'Control.Exception.mask' or something else.
@@ -216,17 +220,56 @@ data ProcEnv i ps m = ProcEnv
   -- ^ Deal with a batch of outputs.
   }
 
+liftEnv
+  :: forall i ps st m . Monad m => ProcEnv i ps m -> ProcEnv i ps (StateT st m)
+liftEnv env = ProcEnv { envGuard = guard
+                      , envI     = lift envI
+                      , envO     = (lift .) . envO
+                      }
+ where
+  ProcEnv {..} = env
+  -- from https://hackage.haskell.org/package/exceptions-0.10.4/docs/src/Control.Monad.Catch.html#line-428
+  guard
+    :: ((forall a . StateT s m a -> StateT s m a) -> StateT s m b)
+    -> StateT s m b
+  guard a = StateT $ \s -> envGuard $ \u -> runStateT (a $ q u) s
+   where
+    q :: (m (a, s) -> m (a, s)) -> StateT s m a -> StateT s m a
+    q u (StateT b) = StateT (u . b)
+
 -- | React to inputs, and handle outputs, with the given actions.
-reactEnv
+envReactProc
+  :: (Proc ps, Monad m) => (ps -> m i) -> ProcEnv i ps m -> ps -> m ps
+envReactProc procInfo env ps0 = flip execStateT ps0 $ envGuard $ \unguard ->
+  whileJustM $ do
+    info <- get >>= lift . procInfo
+    (unguard envI >>=) $ traverse $ \i -> do
+      outs <- state $ react i
+      unguard $ envO info outs
+      pure ()
+  where ProcEnv {..} = liftEnv env
+
+-- | React to inputs, and handle outputs, with the given actions.
+envReactProcess
   :: (Process p, Monad m, Ctx p m)
   => (p -> m i)
   -> ProcEnv i (State p) m
   -> p
   -> m ()
-reactEnv procInfo ProcEnv {..} proc = void $ envGuard $ \unguard ->
-  whileJustM $ unguard $ do
+envReactProcess procInfo ProcEnv {..} proc = void $ envGuard $ \unguard ->
+  whileJustM $ do
     info <- procInfo proc
-    (envI >>=) $ traverse $ \i -> do
+    (unguard envI >>=) $ traverse $ \i -> do
       outs <- reactM proc i
-      envO info outs
+      unguard $ envO info outs
       pure ()
+
+-- | 'envReactProcess' with a particular input state, and return an output state.
+envReactProcess'
+  :: (Process p, Monad m, Ctx p m)
+  => (p -> m i)
+  -> ProcEnv i (State p) m
+  -> State p
+  -> m (State p)
+envReactProcess' procInfo env =
+  fmap snd . asState (envReactProcess procInfo env)

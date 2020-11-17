@@ -77,9 +77,9 @@ Library
     , primitive
     , schedule
     , serialise
+    , transformers
     -- P4P.Proc.Util
     , smash
-    , transformers
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Proc

@@ -22,7 +22,8 @@ import           Data.Schedule                    (Tick)
 import           Data.Void                        (Void, absurd)
 import           P4P.Proc                         (PRef, Proc (..),
                                                    ProcEnv (..), ProcIface (..),
-                                                   Process (..))
+                                                   Process (..),
+                                                   envReactProcess', liftEnv)
 import           P4P.Proc.Util                    (Can (..), knot2UReactM)
 
 -- internal
@@ -126,7 +127,8 @@ Happily, runSimXS itself doesn't contain this fugliness and its API is clean.
 However it only works on extension processes implemented as a pure Proc.
 -}
 runSimX env s0 =
-  simulate @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
+  envReactProcess'
+      @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
       simXNowM
       (liftEnv env)
       s0

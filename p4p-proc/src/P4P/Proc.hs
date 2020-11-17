@@ -15,12 +15,21 @@ module P4P.Proc
   , reactAllM
   , asState
   , ProcEnv(..)
-  , reactEnv
+  , liftEnv
+  , envReactProc
+  , envReactProcess
+  , envReactProcess'
   , Tick
   -- protocol
+  , PortNumber
   , SockAddr(..)
   , Observation(..)
+  , obsToPair
+  , obsIsPositive
+  , obsIsNegative
   , Observations
+  , obsPositiveFromList
+  , updateTrustedObs
   , UProtocol(..)
   , UMsg(..)
   , UMsgI

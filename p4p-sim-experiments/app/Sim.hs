@@ -15,7 +15,8 @@ import           Codec.Serialise              (Serialise (..))
 import           Control.Op
 import           Data.ByteString.Char8        (pack)
 import           Data.Dependent.Sum           (DSum (..))
-import           P4P.Proc                     (Proc, SockAddr (..))
+import           P4P.Proc                     (Proc, SockAddr (..),
+                                               obsPositiveFromList)
 
 -- external, protocol
 import           P4P.Protocol.DHT.Kademlia    (defaultParams, newRandomState)
@@ -44,7 +45,7 @@ instance SimC' ps => SimC ps
 
 mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
 mkPState simOpts = \case
-  SEcho -> \p -> pure (EState [SockAddrInet p 0] 0)
+  SEcho -> \p -> pure (EchoState (obsPositiveFromList 0 [SockAddrInet p 0]) 0)
   SKad  -> \p -> do
     let params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick procOpts
         addr   = pack $ "addr:" <> show p
@@ -57,7 +58,7 @@ runStd opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
   let mkPS    = mkPState simOpts p
   let prompt  = "p4p " <> drop 5 (show simXOpts) <> "> "
   let mkStdIO = optionTerminalStdIO simRTOptions "p4p" ".sim_history" prompt
-  bracketHEF mkStdIO $ \(iact, stdio) -> do
+  bracket2 mkStdIO $ \(iact, stdio) -> do
     let simUserIO = defaultSimUserIO @ps @() stdio
     runSimIO @(PMut' ps) simOpts mkPS iact simUserIO >>= handleRTResult
  where
@@ -78,10 +79,13 @@ runTB opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
 simParseOptions :: Parser xo -> [String] -> IO (SimXOptions xo)
 simParseOptions xopts = parseArgsIO'
   "sim - a simulator for p4p protocols"
-  (  "Simulate a p4p protocol. Commands are given on stdin and replies "
-  <> "are given on stdout. The syntax is $pid :~ $command where $pid "
-  <> "and $command are Haskell Show/Read instance expressions, e.g. 0 :~ "
-  <> "\"Hello, world!\". Give -v for more detailed output."
+  (defaultDescription
+    "Simulate a p4p protocol"
+    (  "$pid :~ $command where $pid is a 16-bit process id and $command is a "
+    <> "Haskell Show/Read expression of the protocol high-interface message "
+    <> "type, e.g. for our example Echo protocol this could be "
+    <> "(SockAddrInet 3 0, (Fwd, \"Hello, World!\"))"
+    )
   )
   (simXOptions xopts)
 

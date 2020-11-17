@@ -45,7 +45,7 @@ main = do
         simOpts & _simRTOptions . _rtProcIOAction %%~ delayedInitMode
 
   let mkStdIO = optionTerminalStdIO rtOpts "p4p" ".sim-kad_history" "p4p Kad> "
-  bracketHEF mkStdIO $ \(isInteractive, stdio) -> do
+  bracket2 mkStdIO $ \(isInteractive, stdio) -> do
     let joinStarted = \case
           KSimJoinStarted -> True
           _               -> False

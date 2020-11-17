@@ -17,7 +17,6 @@ import qualified Data.Set                       as S
 
 import           Codec.Serialise                (Serialise (..))
 import           Control.Monad                  (when)
-import           Control.Monad.Extra            (untilJustM)
 import           Data.Foldable                  (traverse_)
 import           Data.Kind                      (Constraint, Type)
 import           Data.List.NonEmpty             (NonEmpty)
@@ -38,7 +37,7 @@ import           Control.Concurrent.STM.TVar    (newTVarIO, readTVarIO,
                                                  writeTVar)
 import           Crypto.Random.Entropy          (getEntropy)
 import           Crypto.Random.Extra            (ScrubbedBytes)
-import           P4P.RT
+import           P4P.RT                         hiding (RTLogging (..))
 
 -- internal
 import           P4P.Sim.Extension
@@ -128,7 +127,6 @@ grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
   runProcIO @(SimFullState ps xs) runReact
                                   simRTOptions
                                   mkNewState
-                                  getNow
                                   logFilter
                                   (Just <$> voidInput, traverse_ absurd)
                                   mkSimUserIO
@@ -144,9 +142,7 @@ grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
                         (newSimState seed simInitLatency initPids)
                         initXState
 
-  getNow fs = simNow (simState fs)
-
-  logFilter = case simLogging of
+  logFilter = case rtLogging simRTOptions of
     LogAll            -> Just $ const True
     LogAllNoUser      -> Just $ logAllNoUser
     LogAllNoUserTicks -> Just $ logAllNoUserTicks @ps
@@ -185,24 +181,15 @@ runSimIO opt =
 -- | Equivalent to @(IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())@.
 type SimUserIO ps xs = RTHiIO (SimFullState ps xs)
 
-defaultSimUserIO :: SimUserRe ps xs => StdIO -> SimUserIO ps xs
-defaultSimUserIO (getInput, doOutput) =
+defaultSimUserIO :: forall ps xs . SimUserRe ps xs => StdIO -> SimUserIO ps xs
+defaultSimUserIO = defaultRTHiIO @(SimFullState ps xs) readCustom showCustom where
   -- support special "pid :~ msg" syntax for SimProcUserI / SimProcUserO
-  let i = untilJustM $ getInput >>= \case
-        Nothing -> pure (Just Nothing) -- EOF, quit
-        Just s  -> if null s
-          then pure Nothing
-          else case readEither s of
-            Right (pid :~ ui) -> pure (Just (Just (SimProcHiI pid ui)))
-            Left  _           -> case readEither s of
-              Right r -> pure (Just (Just r))
-              Left  e -> doOutput e >> pure Nothing
-                -- TODO: add some help text, ideally with some introspection
-                -- that prints out some generated concrete examples
-      o = \case
-        SimProcHiO pid uo -> doOutput $ show $ pid :~ uo
-        x                 -> doOutput $ show x
-  in  (i, traverse_ o)
+  readCustom s = pure $ case readEither s of
+    Right (pid :~ ui) -> Right (SimProcHiI pid ui)
+    Left  e           -> Left e
+  showCustom = \case
+    SimProcHiO pid uo -> pure $ Just $ show $ pid :~ uo
+    _                 -> pure $ Nothing
 
 {- | Convert a 'SimUserIO' to have auto-join and auto-quit behaviour.
 

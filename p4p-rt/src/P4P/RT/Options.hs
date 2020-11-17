@@ -242,19 +242,63 @@ allActionOptions =
               ]
         )
 
-data RTOptions = RTOptions
+data RTLogging =
+    LogNone
+    -- ^ Log nothing
+  | LogLo
+    -- ^ Log all MsgLo, i.e. network traffic
+  | LogLoHi
+    -- ^ Log all MsgLo and MsgHi, i.e. network traffic and user IO.
+  | LogLoHiEnv
+    -- ^ Log everything including ticks - warning very spammy!
+ deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
+makeLenses_ ''RTLogging
+
+rtLogOptions :: Parser RTLogging
+rtLogOptions =
+  (  option auto
+    <| long "logging"
+    <> metavar "Logger"
+    <> help ("Logging profile, " <> showOptions @RTLogging)
+    <> completeWith (show <$> allOptions @RTLogging)
+    <> value LogNone
+    <> showDefault
+    )
+    <|> (   loggerFromInt
+        <$< length
+        <$< many
+        <|  flag' ()
+        <|  short 'v'
+        <>  help
+              (  "Logging profile, occurence-counted flag. "
+              <> loggerFromIntStrDesc
+              )
+        )
+ where
+  loggerFromInt :: Int -> RTLogging
+  loggerFromInt i | i > 2     = LogLoHiEnv
+                  | i == 2    = LogLoHi
+                  | i == 1    = LogLo
+                  | otherwise = LogNone
+
+  loggerFromIntStrDesc :: String
+  loggerFromIntStrDesc =
+    "0 -> LogNone, 1 -> LogLo, 2 -> LogLoHi, 3+ -> LogLoHiEnv."
+
+data RTOptions log = RTOptions
   { rtMsTick       :: !Integer
   -- :^ initial execution config, ignored during replay since it is read
   , rtProcIOAction :: !(ProcIOAction FilePath)
   -- :^ IO options, inc. record/replay
+  , rtLogging      :: !log
   , rtLogOutput    :: !(Either CInt FilePath)
   , rtLogTimeFmt   :: !String
   }
   deriving (Eq, Show, Read, Generic)
 makeLenses_ ''RTOptions
 
-procOptions :: Parser RTOptions
-procOptions =
+rtOptions :: Parser log -> Parser (RTOptions log)
+rtOptions logOptions =
   RTOptions
     <$> (  option auto
         <| long "ms-per-tick"
@@ -267,6 +311,8 @@ procOptions =
         )
 
     <*> allActionOptions
+
+    <*> logOptions
 
     <*> (   (   Left
             <$< option auto
@@ -339,3 +385,24 @@ convOptions xopts =
             )
         )
     <*> xopts
+
+defaultDescription :: String -> String -> String
+defaultDescription synopsis syntax =
+  synopsis
+    <> ". Commands are given on stdin and replies are given on "
+    <> "stdout. The syntax is "
+    <> syntax
+    <> ". Give -v for more detailed output."
+
+
+mkParser :: String -> String -> Parser opt -> ParserInfo opt
+mkParser summary desc parser = info
+  (helper <*> parser)
+  (fullDesc <> header summary <> progDesc desc <> failureCode 2)
+
+parseArgsIO :: ParserInfo opt -> [String] -> IO opt
+parseArgsIO parser args =
+  execParserPure defaultPrefs parser args |> handleParseResult
+
+parseArgsIO' :: String -> String -> Parser opt -> [String] -> IO opt
+parseArgsIO' title desc parseOpt = parseArgsIO $ mkParser title desc parseOpt

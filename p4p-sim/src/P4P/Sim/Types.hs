@@ -25,7 +25,7 @@ import           Crypto.Random.Extra   (ByteArrayAccess, ChaChaDRGInsecure,
                                         initialize)
 import           Data.Binary           (Binary)
 import           Data.Map.Strict       (Map)
-import           Data.Schedule         (Tick)
+import           Data.Schedule         (HasNow (..), Tick)
 import           Data.Set              (Set)
 import           Data.Void             (Void, absurd)
 import           Data.Word             (Word16)
@@ -36,10 +36,6 @@ import           P4P.Proc              (GMsgI, GMsgO, PMsgI, PMsgI, PMsgO,
 -- internal
 import           P4P.Sim.Numeric
 
-
--- | A pair that is slightly easier to type
-data KV k v = !k :~ !v
-  deriving (Eq, Ord, Show, Read, Generic)
 
 -- | Process id type. This is internal to the simulation for convenience, and
 -- is not made available to the process themselves.
@@ -190,6 +186,9 @@ instance SimXProcIface ps xs => ProcIface (SimFullState ps xs) where
   type HiI (SimFullState ps xs) = SimXHiI ps xs
   type HiO (SimFullState ps xs) = SimXHiO ps xs
   type AuxO (SimFullState ps xs) = SimAuxO ps
+
+instance HasNow (SimFullState ps xs) where
+  getNow = simNow . simState
 
 -- | Input into the sim.
 type SimI ps = GMsgI Tick Void (SimHiI ps)
