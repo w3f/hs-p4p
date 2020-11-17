@@ -212,41 +212,27 @@ asState runProcess pstate = do
 
 -- | Simple model of a process environment, for 'envReactProc' et. al.
 data ProcEnv i ps m = ProcEnv
-  { envGuard :: !(forall b. ((forall a. m a -> m a) -> m b) -> m b)
-  -- ^ Custom guard function, e.g. 'Control.Exception.mask' or something else.
-  , envI     :: !(m (Maybe (PMsgI ps)))
+  { envI :: !(m (Maybe (PMsgI ps)))
   -- ^ Get an input, or EOF.
-  , envO     :: !(i -> [PMsgO ps] -> m ())
+  , envO :: !(i -> [PMsgO ps] -> m ())
   -- ^ Deal with a batch of outputs.
+  -- Batching allows the env to perform flow control more pro-actively if
+  -- needed, since it now also receives a signal on [].
   }
 
 liftEnv
   :: forall i ps st m . Monad m => ProcEnv i ps m -> ProcEnv i ps (StateT st m)
-liftEnv env = ProcEnv { envGuard = guard
-                      , envI     = lift envI
-                      , envO     = (lift .) . envO
-                      }
- where
-  ProcEnv {..} = env
-  -- from https://hackage.haskell.org/package/exceptions-0.10.4/docs/src/Control.Monad.Catch.html#line-428
-  guard
-    :: ((forall a . StateT s m a -> StateT s m a) -> StateT s m b)
-    -> StateT s m b
-  guard a = StateT $ \s -> envGuard $ \u -> runStateT (a $ q u) s
-   where
-    q :: (m (a, s) -> m (a, s)) -> StateT s m a -> StateT s m a
-    q u (StateT b) = StateT (u . b)
+liftEnv ProcEnv {..} = ProcEnv { envI = lift envI, envO = (lift .) . envO }
 
 -- | React to inputs, and handle outputs, with the given actions.
 envReactProc
   :: (Proc ps, Monad m) => (ps -> m i) -> ProcEnv i ps m -> ps -> m ps
-envReactProc procInfo env ps0 = flip execStateT ps0 $ envGuard $ \unguard ->
-  whileJustM $ do
-    info <- get >>= lift . procInfo
-    (unguard envI >>=) $ traverse $ \i -> do
-      outs <- state $ react i
-      unguard $ envO info outs
-      pure ()
+envReactProc procInfo env ps0 = flip execStateT ps0 $ whileJustM $ do
+  info <- get >>= lift . procInfo
+  (envI >>=) $ traverse $ \i -> do
+    outs <- state $ react i
+    envO info outs
+    pure ()
   where ProcEnv {..} = liftEnv env
 
 -- | React to inputs, and handle outputs, with the given actions.
@@ -256,13 +242,12 @@ envReactProcess
   -> ProcEnv i (State p) m
   -> p
   -> m ()
-envReactProcess procInfo ProcEnv {..} proc = void $ envGuard $ \unguard ->
-  whileJustM $ do
-    info <- procInfo proc
-    (unguard envI >>=) $ traverse $ \i -> do
-      outs <- reactM proc i
-      unguard $ envO info outs
-      pure ()
+envReactProcess procInfo ProcEnv {..} proc = void $ whileJustM $ do
+  info <- procInfo proc
+  (envI >>=) $ traverse $ \i -> do
+    outs <- reactM proc i
+    envO info outs
+    pure ()
 
 -- | 'envReactProcess' with a particular input state, and return an output state.
 envReactProcess'

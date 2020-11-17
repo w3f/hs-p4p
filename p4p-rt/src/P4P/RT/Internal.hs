@@ -61,7 +61,7 @@ import           System.IO                      (BufferMode (..), Handle,
                                                  hPutStrLn, hSetBuffering,
                                                  openBinaryFile, stderr)
 import           System.IO.Error                (annotateIOError, catchIOError)
-import           UnliftIO.Exception             (bracket, mask, throwIO)
+import           UnliftIO.Exception             (bracket, throwIO)
 
 -- internal
 import           P4P.RT.Internal.Serialise
@@ -275,9 +275,6 @@ defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
       case procOActWrite procOMsg of
         -- use rtLoO / rtHiO only if we're not writing output
         Nothing -> do
-          -- send all the relevant outs in one batch
-          -- this allows the other component to perform flow control more
-          -- pro-actively, since they now receive a signal on []
           rtHiO $ mapMaybe onlyHi outs
           rtLoO $ mapMaybe onlyLo outs
         -- additionally, if we have interactive input, then echo back the output
@@ -325,42 +322,11 @@ runProcIO envReact opt mkNewState logFilter rtLoIO mkRTHiIO =
     LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
 
     (isInteractive, rtHiIO) <- mkRTHiIO new
-    {-
-    TODO: this is a hack that prevents ctrl-c from quitting the program in
-    interactive mode, similar to the behaviour of other REPLs. Without this, it
-    is possible for ctrl-c to quit the program if the user is quick and gives
-    the signal *in between* calls to libreadline [1], since we only ignore
-    Interrupt during those calls when it is interrupted.
-
-    However the way this is implemented is a bit shitty, as it prevents a user
-    from aborting an computation in interactive mode. (This is possible in
-    other REPLs). Not that this matters for a network simulator where things
-    are IO-bound not CPU-bound, but ideally we'd abort the current computation
-    and rewind the state back to the end of the previous computation. That's
-    hard since we support fake-pure impure 'Process' (we'd have to @suspend@
-    and @proceed@ in between every input, for all processes being simulated),
-    but would be easy if we only supported 'Proc'.
-
-    In non-interactive mode, nothing is changed and the user can abort whenever
-    they want, as expected. This exits the program so we don't need to worry
-    about restoring previous state, etc.
-
-    [1] With the new haskeline integration, this seems not to happen *in
-    practise* (you need to rm mask below to test it) although in theory it
-    should, perhaps the haskeline event loop is tighter than our old hacky
-    readline event loop... If we are convinced this will never be a problem, we
-    could drop the whole guard mechanism.
-    -}
-    let guard :: forall b . ((forall a . IO a -> IO a) -> IO b) -> IO b
-        guard act = if isInteractive && defaultRTWouldInteract opt
-          then mask $ \_ -> act id -- guard masks, unguard doesn't restore
-          else act id -- guard does nothing, no mask to restore
-
     let (imsg, omsg) = (procIMsg, procOMsg)
         initTick = getNow ifs
         mkRT = defaultRT @ps opt initTick logFilter rtLoIO rtHiIO imsg omsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
-      let env = ProcEnv guard rtRunI rtRunO
+      let env = ProcEnv rtRunI rtRunO
       ofs <- onExceptionShow "envReact" $ envReact env ifs
       let lastTick = getNow ofs
 
