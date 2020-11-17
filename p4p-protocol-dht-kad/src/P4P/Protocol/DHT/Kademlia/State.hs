@@ -380,14 +380,16 @@ newRandomState getEntropy addrs params =
     <*> getEntropy (R.seedLength @drg)
     <*> pure params
 
-newCmdId :: R.DRG' drg => State drg -> (ReqId, State drg)
-newCmdId s@State {..} = (reqid, s { kRng = kRng' })
-  where (reqid, kRng') = R.randomBytesGenerate reqIdWith kRng
+newRandomKey :: R.DRG' drg => State drg -> (ReqId, State drg)
+newRandomKey s@State {..} = (reqid, s { kRng = kRng' })
+ where
+  (reqid, kRng') =
+    R.randomBytesGenerate (fromIntegral (parKeyBytes kParams)) kRng
 
 newNodeIdR :: R.DRG' drg => Int -> State drg -> (NodeId, State drg)
 newNodeIdR prefixMatching s0 = (nId, s1)
  where
-  (rId, s1) = newCmdId s0
+  (rId, s1) = newRandomKey s0
   mkMask p = replicate a maxBound <> m <> replicate b 0   where
     a = p `div` 8
     r = (parKeyBits (kParams s0) - p) `rem` 8

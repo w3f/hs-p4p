@@ -168,7 +168,7 @@ I-bucket-refresh
 kRefreshBucket :: (Monad m, R.DRG' g) => Int -> State g -> m ([KadO], State g)
 kRefreshBucket idx s0 = flip runStateWT s0 $ do
   nId   <- StateT $ kRefreshBucketOnly idx
-  cmdId <- state newCmdId
+  cmdId <- _kRng %%= newReqId
   stateWT $ icmdStart (Command cmdId (LookupNode nId)) False
 
 -- | Bump the bucket of the given nodeId, resetting its refresh time.
@@ -747,7 +747,7 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
     RepublishKey  key -> do
       let StoreEntry {..} =
             fromJustNote "RepublishKey couldn't find key" $ kStore ^? ix key
-      cmdId <- state newCmdId
+      cmdId <- _kRng %%= newReqId
       stateWT $ icmdStart (Command cmdId (InsertValue key sValue)) False
     ExpireKey key -> do
       let StoreEntry {..} =

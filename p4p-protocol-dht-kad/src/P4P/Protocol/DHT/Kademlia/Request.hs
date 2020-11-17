@@ -174,8 +174,8 @@ oreqIndex Msg {..} = case body of
   Right _            -> error "oreqMetadata: oreqMsg not a request"
   Left  Request {..} -> ((dst, reqBody), reqId)
 
-newReqId :: R.DRG' drg => Int -> drg -> (ReqId, drg)
-newReqId = R.randomBytesGenerate
+newReqId :: R.DRG' drg => drg -> (ReqId, drg)
+newReqId = R.randomBytesGenerate reqIdWidth
 
 {- | Run a new or existing 'OReqProcess' for the given outgoing request.
 
@@ -203,7 +203,7 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
       error
         "oreqStart failed size check, programmer fail to give sufficiently-high rate limit"
     Absent True -> do
-      reqId <- ldrg %%= newReqId reqIdWith
+      reqId <- ldrg %%= newReqId
       now   <- SC.tickNow <$> use lsched
       let (dstAddr, request) = mkMsg now $ Request reqId reqBody
       lt  <- lsched %%= SC.after timeout (TOOReq reqDst reqBody)

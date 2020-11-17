@@ -51,7 +51,7 @@ randomProbGenerate g0 =
 
 -- | Keep generating a value until it fits a predicate.
 --
--- >>> let (p, g1) = generateUntil (/= 0.0) randomProbGenerate g0
+-- >>> let genNonZero g0 = generateUntil (/= 0.0) randomProbGenerate g0
 generateUntil :: DRG g => (a -> Bool) -> (g -> (a, g)) -> g -> (a, g)
 generateUntil match gen g0 =
   let (a, g1) = gen g0

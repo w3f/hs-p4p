@@ -6,7 +6,7 @@ module P4P.Protocol.DHT.Kademlia
   , KParams(..)
   , NodeInfo(..)
   , CmdId
-  , reqIdWith
+  , reqIdWidth
   , Command(..)
   , CommandBody(..)
   , CommandReply(..)

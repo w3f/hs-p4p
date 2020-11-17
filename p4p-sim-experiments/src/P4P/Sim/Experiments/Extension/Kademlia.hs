@@ -78,7 +78,7 @@ sendCommand
   -> CommandBody
   -> WriterT [Either (SimHiI KS) KSimO] (StateT KSimState m) ()
 sendCommand pid cmd = do
-  cId <- _ksDRG %%= randomBytesGenerate reqIdWith
+  cId <- _ksDRG %%= randomBytesGenerate reqIdWidth
   tell1 $ Left $ SimProcHiI pid $ Command cId cmd
 
 kSim

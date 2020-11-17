@@ -82,9 +82,6 @@ Library
     , transformers
     -- Data.*
     , containers
-    -- Control.Concurrent.Async
-    , async
-    , stm
     -- Statistics.Distribution.Pure
     , math-functions
     , statistics

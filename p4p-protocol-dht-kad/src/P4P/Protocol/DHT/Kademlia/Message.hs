@@ -74,8 +74,8 @@ data Request = Request
 --
 -- This is based on the expected lifetime of these id values, 128 bits is not
 -- expected to be predictable in such a short timeframe.
-reqIdWith :: Int
-reqIdWith = 16
+reqIdWidth :: Int
+reqIdWidth = 16
 
 data ReplyBody =
     Pong
