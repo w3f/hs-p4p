@@ -22,8 +22,6 @@ Abstractions
 Technical debt
 ==============
 
-- RT logging should log (certain) inputs as well as outputs
-- envReact should take initial `i` and retain it from the env as State, instead of `p -> m i`
 - RT: when resuming, implement the ability to "skip forward" tickNow to the current system time
   --init-recv-addr --init-ms-per-tick --resume-system-time
 - update crypto interface

@@ -11,17 +11,31 @@ module P4P.RT.Options where
 -- external
 import           Control.Lens.TH.Extra          (makeLenses_)
 import           Control.Op
+import           Data.List                      (intercalate)
 import           Foreign.C.Types                (CInt)
 import           GHC.Generics                   (Generic)
 import           Options.Applicative
 import           Options.Applicative.Help.Chunk
 
 
-showOptions :: forall a . (Show a, Enum a, Bounded a) => String
-showOptions = "one of: " <> show (allOptions :: [a])
+enumAll :: forall a . (Enum a, Bounded a) => [a]
+enumAll = enumFrom minBound
 
-allOptions :: forall a . (Enum a, Bounded a) => [a]
-allOptions = enumFrom minBound
+enumFromInt :: forall a . (Enum a, Bounded a) => Int -> a
+enumFromInt i | i < fromEnum @a minBound = minBound
+              | i > fromEnum @a maxBound = maxBound
+              | otherwise                = toEnum i
+
+enumAllShow :: forall a . (Show a, Enum a, Bounded a) => String
+enumAllShow = "one of: " <> show (enumAll :: [a])
+
+enumAllShowInt :: forall a . (Show a, Enum a, Bounded a) => String
+enumAllShowInt = intercalate ", " $ do
+  zipWith showE [fromEnum @a minBound ..] (enumAll @a)
+ where
+  showE i e | i == fromEnum @a minBound = show i <> "- -> " <> show e
+            | i == fromEnum @a maxBound = show i <> "+ -> " <> show e
+            | otherwise                 = show i <> " -> " <> show e
 
 helps :: [String] -> Mod f a
 helps strs = helpDoc $ Just $ extractChunk $ vsepChunks $ fmap paragraph strs
@@ -244,13 +258,17 @@ allActionOptions =
 
 data RTLogging =
     LogNone
-    -- ^ Log nothing
-  | LogLo
-    -- ^ Log all MsgLo, i.e. network traffic
-  | LogLoHi
-    -- ^ Log all MsgLo and MsgHi, i.e. network traffic and user IO.
-  | LogLoHiEnv
-    -- ^ Log everything including ticks - warning very spammy!
+    -- ^ Log nothing.
+  | LogAux
+    -- ^ Log AuxO, i.e. protocol logging messages.
+  | LogAuxLo
+    -- ^ Also log LoI, LoO, i.e. protocol network traffic.
+  | LogAuxLoHi
+    -- ^ Also log HiI, HiO, i.e. user IO.
+  | LogAuxLoHiEnvO
+    -- ^ Also log EnvO, i.e. output timing signals.
+  | LogAuxLoHiEnvIO
+    -- ^ Log everything including input ticks - warning very spammy!
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 makeLenses_ ''RTLogging
 
@@ -259,31 +277,21 @@ rtLogOptions =
   (  option auto
     <| long "logging"
     <> metavar "Logger"
-    <> help ("Logging profile, " <> showOptions @RTLogging)
-    <> completeWith (show <$> allOptions @RTLogging)
+    <> help ("Logging profile, " <> enumAllShow @RTLogging)
+    <> completeWith (show <$> enumAll @RTLogging)
     <> value LogNone
     <> showDefault
     )
-    <|> (   loggerFromInt
+    <|> (   enumFromInt
         <$< length
         <$< many
         <|  flag' ()
         <|  short 'v'
         <>  help
               (  "Logging profile, occurence-counted flag. "
-              <> loggerFromIntStrDesc
+              <> enumAllShowInt @RTLogging
               )
         )
- where
-  loggerFromInt :: Int -> RTLogging
-  loggerFromInt i | i > 2     = LogLoHiEnv
-                  | i == 2    = LogLoHi
-                  | i == 1    = LogLo
-                  | otherwise = LogNone
-
-  loggerFromIntStrDesc :: String
-  loggerFromIntStrDesc =
-    "0 -> LogNone, 1 -> LogLo, 2 -> LogLoHi, 3+ -> LogLoHiEnv."
 
 data RTOptions log = RTOptions
   { rtMsTick       :: !Integer

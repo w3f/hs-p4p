@@ -1,11 +1,14 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DefaultSignatures   #-}
 {-# LANGUAGE DeriveAnyClass      #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeFamilies        #-}
 
 -- GHC bug, default implementations for a class includes subclass constraint
@@ -16,11 +19,9 @@ module P4P.Proc.Internal where
 
 -- external
 import           Codec.Serialise                  (Serialise)
-import           Control.Monad                    (join, void)
-import           Control.Monad.Extra              (whileJustM)
+import           Control.Monad                    (join)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
-import           Control.Monad.Trans.State.Strict (StateT (..), execStateT, get,
-                                                   state)
+import           Control.Monad.Trans.State.Strict (execStateT, state)
 import           Control.Op
 import           Data.Binary                      (Binary)
 import           Data.Kind                        (Constraint, Type)
@@ -79,6 +80,30 @@ class ProcIface ps where
   type EnvI ps :: Type
   type EnvI ps = Tick
 
+  {- | Type of message from this process to the environment.
+
+  This is always 'Tick' in our layer-based model; all other I/O is supposed to
+  pass via the lower and higher layers.
+
+  For 'Tick', this gives the process the ability to assert that the timing of
+  when outgoing messages are emitted, is part of the contract of its behaviour.
+  How this works is as follows: the process may output ticks to fix the order
+  of outgoing messages relative to these tick outputs, and this will be
+  expected to be reproducible when replayed.
+
+  If the process does not output ticks, then it is only the relative ordering
+  of other outgoing messages that are part of the contract of its behaviour.
+  When replayed later, this ordering must still be reproducible, but the
+  precise tick at which they are output is not checked.
+
+  In the latter case, it is still recommended to leave this as 'Tick' for
+  interoperability, unless you are composing your process with another one in
+  such a way that requires this to be set to something else - the documentation
+  for that composition function will give further instructions if necessary.
+  -}
+  type EnvO ps :: Type
+  type EnvO ps = Tick
+
   {- | Type of auxiliary message from this process, e.g. logging messages.
 
   This is exempt from the deterministic behaviour contract.
@@ -94,21 +119,22 @@ instance ProcIface () where
   type HiO () = Void
 
 {- | General message to/from a process. -}
-data GMsg (dir :: Direction) e l h
+data GMsg (dir :: Direction) e l h a
   = MsgEnv !e
   -- ^ Message from/to the environment.
   | MsgLo !l
   -- ^ Message from/to the lower layer.
   | MsgHi !h
   -- ^ Message from/to the higher layer.
+  | MsgAux !a
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-type GMsgI e l h = GMsg 'Incoming e l h
-type GMsgO e l h = GMsg 'Outgoing e l h
+type GMsgI e l h a = GMsg 'Incoming e l h a
+type GMsgO e l h a = GMsg 'Outgoing e l h a
 
-type PMsgI ps = GMsgI (EnvI ps) (LoI ps) (HiI ps)
-type PMsgO ps = GMsgO (AuxO ps) (LoO ps) (HiO ps)
-type PMsgO' ps = GMsgO Void (LoO ps) (HiO ps)
+type PMsgI ps = GMsgI (EnvI ps) (LoI ps) (HiI ps) Void
+type PMsgO ps = GMsgO (EnvO ps) (LoO ps) (HiO ps) (AuxO ps)
+type PMsgO' ps = GMsgO (EnvO ps) (LoO ps) (HiO ps) Void
 
 {- | Pure communicating process.
 
@@ -210,51 +236,69 @@ asState runProcess pstate = do
   s <- suspend p
   pure (r, s)
 
--- | Simple model of a process environment, for 'envReactProc' et. al.
-data ProcEnv i ps m = ProcEnv
-  { envI :: !(m (Maybe (PMsgI ps)))
+-- | Simple model of a process IO, for 'runReactProc' et. al.
+data ProcIO ps m = ProcIO
+  { procLog :: !(EnvI ps -> Either (PMsgI ps) [PMsgO ps] -> m ())
+  -- ^ Log an input or several outputs.
+  , procI   :: !(m (Maybe (PMsgI ps)))
   -- ^ Get an input, or EOF.
-  , envO :: !(i -> [PMsgO ps] -> m ())
+  , procO   :: !([PMsgO ps] -> m ())
   -- ^ Deal with a batch of outputs.
   -- Batching allows the env to perform flow control more pro-actively if
   -- needed, since it now also receives a signal on [].
   }
 
-liftEnv
-  :: forall i ps st m . Monad m => ProcEnv i ps m -> ProcEnv i ps (StateT st m)
-liftEnv ProcEnv {..} = ProcEnv { envI = lift envI, envO = (lift .) . envO }
+liftProcIO
+  :: forall ps t m . (MonadTrans t, Monad m) => ProcIO ps m -> ProcIO ps (t m)
+liftProcIO ProcIO {..} = ProcIO { procLog = (lift .) . procLog
+                                , procI   = lift procI
+                                , procO   = lift . procO
+                                }
 
 -- | React to inputs, and handle outputs, with the given actions.
-envReactProc
-  :: (Proc ps, Monad m) => (ps -> m i) -> ProcEnv i ps m -> ps -> m ps
-envReactProc procInfo env ps0 = flip execStateT ps0 $ whileJustM $ do
-  info <- get >>= lift . procInfo
-  (envI >>=) $ traverse $ \i -> do
-    outs <- state $ react i
-    envO info outs
-    pure ()
-  where ProcEnv {..} = liftEnv env
+runReactProc :: (Proc ps, Monad m) => ProcIO ps m -> EnvI ps -> ps -> m ps
+runReactProc procIO ei0 ps0 = flip execStateT ps0 $ go ei0
+ where
+  ProcIO {..} = liftProcIO procIO
+  go ei = procI >>= \case
+    Nothing -> pure ()
+    Just i  -> do
+      procLog ei $ Left i
+      outs <- state $ react i
+      procLog ei $ Right outs
+      procO outs
+      go $ case i of
+        MsgEnv ei' -> ei'
+        _          -> ei
 
 -- | React to inputs, and handle outputs, with the given actions.
-envReactProcess
+runReactProcess
   :: (Process p, Monad m, Ctx p m)
-  => (p -> m i)
-  -> ProcEnv i (State p) m
+  => ProcIO (State p) m
+  -> EnvI (State p)
   -> p
   -> m ()
-envReactProcess procInfo ProcEnv {..} proc = void $ whileJustM $ do
-  info <- procInfo proc
-  (envI >>=) $ traverse $ \i -> do
-    outs <- reactM proc i
-    envO info outs
-    pure ()
+runReactProcess procIO ei0 proc = go ei0
+ where
+  ProcIO {..} = procIO
+  go ei = procI >>= \case
+    Nothing -> pure ()
+    Just i  -> do
+      procLog ei $ Left i
+      outs <- reactM proc i
+      procLog ei $ Right outs
+      procO outs
+      go $ case i of
+        MsgEnv ei' -> ei'
+        _          -> ei
 
--- | 'envReactProcess' with a particular input state, and return an output state.
-envReactProcess'
-  :: (Process p, Monad m, Ctx p m)
-  => (p -> m i)
-  -> ProcEnv i (State p) m
+-- | 'runReactProcess' with a particular input state, and return an output state.
+runReactProcess'
+  :: forall p m
+   . (Process p, Monad m, Ctx p m)
+  => ProcIO (State p) m
+  -> EnvI (State p)
   -> State p
   -> m (State p)
-envReactProcess' procInfo env =
-  fmap snd . asState (envReactProcess procInfo env)
+runReactProcess' procIO ei0 ps0 =
+  snd <$> asState (runReactProcess @p procIO ei0) ps0

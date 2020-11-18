@@ -265,9 +265,9 @@ data KLogMsg =
 type KHiI = Command
 type KHiO = CommandReply
 
-type KadI' = P.GMsgI SC.Tick (P.UMsgI NodeAddr Msg) KHiI
-type KadI = P.GMsgI (SC.Tick, KTask) (P.UMsgI NodeAddr Msg) KHiI
-type KadO = P.GMsgO KLogMsg (P.UMsgO NodeAddr Msg) KHiO
+type KadI' = P.GMsgI SC.Tick (P.UMsgI NodeAddr Msg) KHiI P.Void
+type KadI = P.GMsgI (SC.Tick, KTask) (P.UMsgI NodeAddr Msg) KHiI P.Void
+type KadO = P.GMsgO SC.Tick (P.UMsgO NodeAddr Msg) KHiO KLogMsg
 
 kLog :: KLogMsg -> KadO
-kLog = P.MsgEnv
+kLog = P.MsgAux

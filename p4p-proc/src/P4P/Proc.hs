@@ -14,12 +14,13 @@ module P4P.Proc
   , ProcMsgO
   , reactAllM
   , asState
-  , ProcEnv(..)
-  , liftEnv
-  , envReactProc
-  , envReactProcess
-  , envReactProcess'
+  , ProcIO(..)
+  , liftProcIO
+  , runReactProc
+  , runReactProcess
+  , runReactProcess'
   , Tick
+  , Void
   -- protocol
   , PortNumber
   , SockAddr(..)
@@ -45,6 +46,7 @@ module P4P.Proc
 where
 
 import           Data.Schedule      (Tick)
+import           Data.Void          (Void)
 import           P4P.Proc.Instances
 import           P4P.Proc.Internal
 import           P4P.Proc.Protocol

@@ -43,11 +43,12 @@ import           Data.Maybe                       (catMaybes)
 import           Data.Schedule                    (Tick, TickDelta)
 import           Data.Traversable                 (for)
 import           P4P.Proc                         (GMsg (..), ProcAddr,
-                                                   ProcEnv (..), ProcIface (..),
+                                                   ProcIO (..), ProcIface (..),
                                                    ProcMsgI, Process (..),
                                                    UMsg (..), UPMsgI, UPMsgO,
-                                                   UProtocol, envReactProcess',
-                                                   liftEnv, obsIsPositive)
+                                                   UProtocol, liftProcIO,
+                                                   obsIsPositive,
+                                                   runReactProcess')
 import           Safe                             (headNote)
 
 -- internal
@@ -178,30 +179,29 @@ procInput
   :: SimProcess p
   => Ctx p m => Monad m => Tick -> Pid -> p -> ProcMsgI p -> SimWT p m ()
 procInput realNow pid proc msgI = do
-  let logS = tell1 . MsgEnv . SimProcEvent
-  logS $ SimMsgRecv pid msgI
+  let logS = tell1 . MsgAux
+      logU = tell1 . MsgHi
+  logS $ SimProcRecv pid msgI
   outs     <- lift2 $ reactM proc msgI
   srcAddrs <- S.toList <$> extractAddress pid False
 
   -- deliver outputs
   for_ outs $ \out -> do
-    logS $ SimMsgSend pid out
+    logS $ SimProcSend pid out
     case out of
-      msg@(MsgHi uo) -> do
-        tell1 $ MsgHi $ SimProcHiO pid uo
-      MsgEnv ao -> do
-        tell1 $ MsgEnv $ SimUserAuxO pid ao
-      imsg@(MsgLo (UData dst msg)) -> do
+      msg@(MsgHi hi) -> do
+        logU $ SimProcHiO pid hi
+      MsgLo (UData dst msg) -> do
         -- to proc, send it to other's inbox
         procs <- use _1
         pids' <- use (_2 . _simAddr . at dst . nom) >$> toList
         pids  <- fmap catMaybes $ for pids' $ \p -> case M.lookup p procs of
           Nothing -> do
-            logS $ SimNoSuchPid (Right pid) p
+            logU $ SimStaleAddrPid dst p
             pure Nothing
           Just dstProc -> pure (Just p)
         when (null pids) $ do
-          logS $ SimNoSuchAddr pid dst
+          logS $ SimProcAddrEmpty pid dst
         for_ pids $ \p -> do
           simLatency   <- use $ _2 . _simLatency
           (delta, src) <- _2 . _simDRG %%= sampleLatency srcAddrs dst simLatency
@@ -210,6 +210,7 @@ procInput realNow pid proc msgI = do
       MsgLo (UOwnAddr obs) -> do
         void $ flip M.traverseWithKey obs $ \addr ob -> do
           mapAddress addr pid (obsIsPositive ob)
+      _ -> pure ()
 
 {- | React to a simulation input. -}
 simReact
@@ -281,7 +282,7 @@ simReact input = execWriterT $ do
       -- user message to a process
       case M.lookup pid procs of
         Nothing -> do
-          tell1 $ MsgEnv $ SimProcEvent $ SimNoSuchPid (Left ()) pid
+          tell1 $ MsgHi $ SimNoSuchPid pid
         Just _ -> do
           pushPMsgI realNow pid (MsgHi hiI)
  where
@@ -333,23 +334,19 @@ instance (
     asLens r .= ps1
     pure o
 
-simNowM
-  :: Allocable st (SimRunState p) ref
-  => Ctx (PSim ref st p) m => PSim ref st p -> m Tick
-simNowM (PSim r) = use $ asLens r . _2 . _simNow
-
 -- note: @p@ here does refer to the process type of individual processes
 runSim
   :: forall p m
    . SimProcess p
   => Ctx p m
   => Monad m
-  => ProcEnv Tick (SimFullState (State p) ()) m
+  => ProcIO (SimFullState (State p) ()) m
+  -> Tick
   -> SimFullState (State p) ()
   -> m (SimFullState (State p) ())
-runSim env s0 =
-  envReactProcess' @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p)
-      simNowM
-      (liftEnv env)
+runSim env i0 s0 =
+  runReactProcess' @(PSim (Const ()) (FakeAlloc1 (SimRunState p)) p)
+      (liftProcIO env)
+      i0
       s0
     `evalStateT` newFakeAlloc1

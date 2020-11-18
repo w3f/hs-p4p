@@ -8,8 +8,8 @@ module P4P.Sim
   , SimHiI
   , SimHiO'(..)
   , SimHiO
-  , SimProcEvt'(..)
-  , SimProcEvt
+  , SimAuxO'(..)
+  , SimAuxO
   , SimState'(..)
   , SimState
   , SimFullState

@@ -32,7 +32,7 @@ import           Data.Set              (Set)
 import           Data.Void             (Void, absurd)
 import           Data.Word             (Word16)
 import           GHC.Generics          (Generic)
-import           P4P.Proc              (GMsgI, GMsgO, PMsgI, PMsgI, PMsgO,
+import           P4P.Proc              (GMsgI, GMsgO, PMsgI, PMsgO,
                                         ProcIface (..), UProtocol (..))
 
 -- internal
@@ -101,19 +101,6 @@ deriving instance (Read (Map Pid ps), Read (SimState ps), Read xs)
 instance (Binary (Map Pid ps), Binary (SimState ps), Binary xs) => Binary (SimFullState ps xs)
 instance (Serialise (Map Pid ps), Serialise (SimState ps), Serialise xs) => Serialise (SimFullState ps xs)
 
-data SimProcEvt' i o a =
-  -- | A process received a message.
-    SimMsgRecv !Pid !i
-  -- | A process sent a message.
-  | SimMsgSend !Pid !o
-  -- | The user or a process tried to send to a non-existing pid.
-  | SimNoSuchPid !(Either () Pid) !Pid
-  -- | A process tried to send to an address with no listeners.
-  | SimNoSuchAddr !Pid !a
- deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
-makePrisms ''SimProcEvt'
-type SimProcEvt ps = SimProcEvt' (PMsgI ps) (PMsgO ps) (Addr ps)
-
 -- | All state relating to a process in the simulation.
 --
 -- This is only used for 'SimProcAdd' and 'SimProcDel', the actual state is
@@ -152,17 +139,26 @@ data SimHiO' ps uo i a xo =
   | SimProcAddResult !Pid !Bool
   | SimProcGetResult !Pid !(Maybe (SimProcState ps i a))
   | SimProcDelResult !Pid !(Maybe (SimProcState ps i a))
+  | SimStaleAddrPid !a !Pid
+    -- ^ The simulation had a stale addr-pid mapping
+    -- This is likely because of a bug in the simulation implementation.
+  | SimNoSuchPid !Pid
+    -- ^ The user tried to send to a non-existing pid.
   | SimExtensionO !xo
     -- ^ extension output type
  deriving (Eq, Show, Read, Generic, Binary, Serialise, Functor)
 type SimXHiO ps xs = SimHiO' ps (HiO ps) (PMsgI ps) (Addr ps) (XHiO xs)
 type SimHiO ps = SimXHiO ps ()
 
-data SimAuxO' ao i o a =
-    SimUserAuxO !Pid !ao
-  | SimProcEvent !(SimProcEvt' i o a)
+data SimAuxO' i o a =
+  -- | A process received a message.
+    SimProcRecv !Pid !i
+  -- | A process sent a message.
+  | SimProcSend !Pid !o
+  -- | A process tried to send to an address with no listeners.
+  | SimProcAddrEmpty !Pid !a
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
-type SimAuxO ps = SimAuxO' (AuxO ps) (PMsgI ps) (PMsgO ps) (Addr ps)
+type SimAuxO ps = SimAuxO' (PMsgI ps) (PMsgO ps) (Addr ps)
 
 class (ProcIface xs, AuxO xs ~ Void) => SimXProcIface ps xs where
   type XHiI xs
@@ -203,10 +199,10 @@ instance HasNow (SimFullState ps xs) where
   getNow = simNow . simState
 
 -- | Input into the sim.
-type SimI ps = GMsgI Tick Void (SimHiI ps)
-type SimXI ps xs = GMsgI Tick Void (SimXHiI ps xs)
+type SimI ps = GMsgI Tick Void (SimHiI ps) Void
+type SimXI ps xs = GMsgI Tick Void (SimXHiI ps xs) Void
 
 -- | Output from the sim.
-type SimO ps = GMsgO (SimAuxO ps) Void (SimHiO ps)
-type SimXO ps xs = GMsgO (SimAuxO ps) Void (SimXHiO ps xs)
-type SimXO' ps xs = GMsgO Void Void (SimXHiO ps xs)
+type SimO ps = GMsgO Tick Void (SimHiO ps) (SimAuxO ps)
+type SimXO ps xs = GMsgO Tick Void (SimXHiO ps xs) (SimAuxO ps)
+type SimXO' ps xs = GMsgO Tick Void (SimXHiO ps xs) Void

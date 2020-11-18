@@ -25,7 +25,6 @@ import           Data.Can                         (Can (..))
 import           Data.Foldable                    (toList, traverse_)
 import           Data.Sequence                    (Seq (..), (|>))
 import           Data.Traversable                 (for)
-import           Data.Void                        (Void)
 
 -- internal
 import           P4P.Proc
@@ -146,7 +145,7 @@ process is a local-only process.
 
 The auxiliary message output type is assumed to be 'Void' for process 2.
 
-The @EnvI@, @LoI@ and @LoO@ types must be the same for both processes.
+The @EnvI@, @EnvO@, @LoI@ and @LoO@ types must be the same for both processes.
 -}
 -- brittany-disable-next-binding
 -- https://github.com/lspitzner/brittany/issues/299
@@ -158,6 +157,7 @@ knot2UReactM
   => LoI (State p1) ~ LoI (State p2)
   => LoO (State p1) ~ LoO (State p2)
   => EnvI (State p1) ~ EnvI (State p2)
+  => EnvO (State p1) ~ EnvO (State p2)
   => Ctx p1 m1
   => Ctx p2 m2
   => Monad m
@@ -179,14 +179,14 @@ knot2UReactM
   -> (forall a . m2 a -> m a)
   -> p1
   -> p2
-  -> GMsgI (EnvI (State p1)) (LoI (State p1)) ui
-  -> m [GMsgO (AuxO (State p1)) (LoO (State p1)) uo]
+  -> GMsgI (EnvI (State p1)) (LoI (State p1)) ui Void
+  -> m [GMsgO (EnvO (State p1)) (LoO (State p1)) uo (AuxO (State p1))]
 knot2UReactM selInU mkI1U mkI2U selO1U selO2U mkOutU =
-  knot2ReactM @_ @_ @(GMsgI (EnvI (State p1)) (LoI (State p1)) i1)
-    @(GMsgO (AuxO (State p1)) (LoO (State p1)) o1)
+  knot2ReactM @_ @_ @(GMsgI (EnvI (State p1)) (LoI (State p1)) i1 Void)
+    @(GMsgO (EnvO (State p1)) (LoO (State p1)) o1 (AuxO (State p1)))
     @o1i2
-    @(GMsgI (EnvI (State p1)) (LoI (State p1)) i2)
-    @(GMsgO Void (LoO (State p1)) o2)
+    @(GMsgI (EnvI (State p1)) (LoI (State p1)) i2 Void)
+    @(GMsgO (EnvO (State p1)) (LoO (State p1)) o2 Void)
     @o2i1
     selIn
     mkI1
@@ -196,29 +196,33 @@ knot2UReactM selInU mkI1U mkI2U selO1U selO2U mkOutU =
     mkOut
  where
   selIn = \case
-    MsgEnv  e -> Two (MsgEnv e) (MsgEnv e)
-    MsgLo l -> Two (MsgLo l) (MsgLo l)
-    MsgHi u -> bimap MsgHi MsgHi (selInU u)
+    MsgEnv e -> Two (MsgEnv e) (MsgEnv e)
+    MsgLo  l -> Two (MsgLo l) (MsgLo l)
+    MsgHi  u -> bimap MsgHi MsgHi (selInU u)
   mkI1 = \case
-    Left  o2i1         -> MsgHi (mkI1U (Left o2i1))
-    Right (MsgEnv e) -> MsgEnv e
-    Right (MsgLo l) -> MsgLo l
-    Right (MsgHi o2) -> MsgHi (mkI1U (Right o2))
+    Left  o2i1        -> MsgHi (mkI1U (Left o2i1))
+    Right (MsgEnv e ) -> MsgEnv e
+    Right (MsgLo  l ) -> MsgLo l
+    Right (MsgHi  o2) -> MsgHi (mkI1U (Right o2))
   mkI2 = \case
-    Left  o1i2         -> MsgHi (mkI2U (Left o1i2))
-    Right (MsgEnv  e) -> MsgEnv e
-    Right (MsgLo l) -> MsgLo l
-    Right (MsgHi o1) -> MsgHi (mkI2U (Right o1))
+    Left  o1i2        -> MsgHi (mkI2U (Left o1i2))
+    Right (MsgEnv e ) -> MsgEnv e
+    Right (MsgLo  l ) -> MsgLo l
+    Right (MsgHi  o1) -> MsgHi (mkI2U (Right o1))
   selO1 = \case
     MsgEnv e -> One (MsgEnv e)
-    MsgLo l -> One (MsgLo l)
-    MsgHi u -> first MsgHi (selO1U u)
+    MsgLo  l -> One (MsgLo l)
+    MsgHi  u -> first MsgHi (selO1U u)
+    MsgAux a -> One (MsgAux a)
   selO2 = \case
+    MsgEnv e -> One (MsgEnv e)
     MsgLo l -> One (MsgLo l)
     MsgHi u -> first MsgHi (selO2U u)
   mkOut = \case
-    Left (MsgEnv e) -> MsgEnv e
-    Left (MsgLo l) -> MsgLo l
-    Left  (MsgHi u) -> MsgHi (mkOutU (Left u))
-    Right (MsgLo l) -> MsgLo l
-    Right (MsgHi u) -> MsgHi (mkOutU (Right u))
+    Left  (MsgEnv e) -> MsgEnv e
+    Left  (MsgLo  l) -> MsgLo l
+    Left  (MsgHi  u) -> MsgHi (mkOutU (Left u))
+    Left  (MsgAux a) -> MsgAux a
+    Right (MsgEnv e) -> MsgEnv e
+    Right (MsgLo  l) -> MsgLo l
+    Right (MsgHi  u) -> MsgHi (mkOutU (Right u))

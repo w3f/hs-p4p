@@ -21,8 +21,8 @@ import           Data.Foldable                  (traverse_)
 import           Data.Kind                      (Constraint, Type)
 import           Data.List.NonEmpty             (NonEmpty)
 import           Data.Void                      (absurd)
-import           P4P.Proc                       (GMsg (..), GMsgO, PMsgI, PMsgO,
-                                                 ProcEnv (..), ProcIface (..),
+import           P4P.Proc                       (GMsg (..), PMsgI, PMsgO,
+                                                 ProcIO (..), ProcIface (..),
                                                  Process (..), Tick,
                                                  UProtocol (..))
 import           Text.Read                      (readEither)
@@ -48,6 +48,7 @@ import           P4P.Sim.Types
 
 
 -- | Convenience type alias for being able to type in and out a simulation.
+-- FIXME: tidy these up...
 type SimUserRe ps xs
   = ( Show ps
     , Read ps
@@ -87,6 +88,8 @@ type SimReRe (codec :: Type -> Constraint) ps xs
 
 type SimLog ps xs
   = ( Show ps
+    , Show (EnvO ps)
+    , Show (LoO ps)
     , Show (Addr ps)
     , Show (PMsgI ps)
     , Show (PMsgO ps)
@@ -97,24 +100,14 @@ type SimLog ps xs
     , Show (XHiO xs)
     )
 
-logAllNoUser :: GMsgO e l h -> Bool
-logAllNoUser = \case
-  MsgHi _ -> False
-  _       -> True
-
-logAllNoUserTicks :: GMsgO (SimAuxO ps) l h -> Bool
-logAllNoUserTicks = \case
-  MsgHi  _ -> False
-  MsgEnv (SimProcEvent (SimMsgRecv _ (MsgEnv _))) -> False
-  _        -> True
-
 grunSimIO
   :: forall ps xs
    . SimLog ps xs
   => SimUserRe ps xs
   => SimReRe Serialise ps xs
   => UProtocol ps
-  => (  ProcEnv Tick (SimFullState ps xs) IO
+  => (  ProcIO (SimFullState ps xs) IO
+     -> Tick
      -> SimFullState ps xs
      -> IO (SimFullState ps xs)
      )
@@ -143,10 +136,27 @@ grunSimIO runReact opt mkXState mkPState mkSimUserIO =
       <$> mkXState
 
   logFilter = case rtLogging simRTOptions of
-    LogAll            -> Just $ const True
-    LogAllNoUser      -> Just $ logAllNoUser
-    LogAllNoUserTicks -> Just $ logAllNoUserTicks @ps
-    LogNone           -> Nothing
+    LogNone -> Nothing
+    lv      -> Just (\msg -> fromEnum lv >= msgLv msg)
+
+  msgLv :: Either (SimXI ps xs) (SimXO ps xs) -> Int
+  msgLv = \case
+    Left  (MsgEnv _                         ) -> 5
+    Right (MsgAux (SimProcRecv _ (MsgEnv _))) -> 5
+
+    Right (MsgEnv _                         ) -> 4
+    Right (MsgAux (SimProcSend _ (MsgEnv _))) -> 4
+
+    Left  (MsgHi  _                         ) -> 3
+    Right (MsgHi  _                         ) -> 3
+    Right (MsgAux (SimProcRecv _ (MsgHi  _))) -> 3
+    Right (MsgAux (SimProcSend _ (MsgHi  _))) -> 3
+
+    Right (MsgAux (SimProcRecv _ (MsgLo  _))) -> 2
+    Right (MsgAux (SimProcSend _ (MsgLo  _))) -> 2
+
+    Right (MsgAux (SimProcSend _ (MsgAux _))) -> 1
+    Right (MsgAux _                         ) -> 1
 
 runSimIO
   :: forall p

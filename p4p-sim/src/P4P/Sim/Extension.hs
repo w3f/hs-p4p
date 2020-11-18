@@ -13,17 +13,15 @@
 module P4P.Sim.Extension where
 
 -- external
-import           Control.Lens.Mutable             (Allocable)
 import           Control.Lens.Mutable.Extra       (Const (..), FakeAlloc2 (..),
                                                    SNat, newFakeAlloc2)
 import           Control.Monad.Trans.State.Strict (StateT (..), evalStateT)
 import           Data.Functor                     (($>))
 import           Data.Schedule                    (Tick)
 import           Data.Void                        (Void, absurd)
-import           P4P.Proc                         (PRef, Proc (..),
-                                                   ProcEnv (..), ProcIface (..),
-                                                   Process (..),
-                                                   envReactProcess', liftEnv)
+import           P4P.Proc                         (PRef, Proc (..), ProcIO (..),
+                                                   ProcIface (..), Process (..),
+                                                   liftProcIO, runReactProcess')
 import           P4P.Proc.Util                    (Can (..), knot2UReactM)
 
 -- internal
@@ -32,7 +30,8 @@ import           P4P.Sim.Types
 
 
 data PSimX ref st p x = PSimX !(PSim ref st p) !x
-type SimXProc xs = (EnvI xs ~ Tick, LoI xs ~ Void, LoO xs ~ Void)
+type SimXProc xs
+  = (EnvI xs ~ Tick, EnvO xs ~ Tick, LoI xs ~ Void, LoO xs ~ Void)
 type SimXProcess p x
   = (Process x, SimXProcIface (State p) (State x), SimXProc (State x))
 
@@ -84,11 +83,6 @@ instance (
       Right xo -> SimExtensionO xo
     watchRun _ _ = pure () -- TODO: for now, don't try to detect loops
 
-simXNowM
-  :: Allocable st (SimRunState p) ref
-  => Ctx (PSimX ref st p x) m => PSimX ref st p x -> m Tick
-simXNowM (PSimX s x) = simNowM s
-
 -- | Run a sim with an extension 'Process'.
 runSimX
   :: forall p x xs_ m
@@ -97,7 +91,8 @@ runSimX
   => Monad m
   => SimXProcess p x
   => Ctx x (StateT (FakeAlloc2 (SimRunState p) xs_) m)
-  => ProcEnv Tick (SimFullState (State p) (State x)) m
+  => ProcIO (SimFullState (State p) (State x)) m
+  -> Tick
   -> SimFullState (State p) (State x)
   -> m (SimFullState (State p) (State x))
 {- API note:
@@ -126,11 +121,11 @@ of how PSim is implemented... ugh
 Happily, runSimXS itself doesn't contain this fugliness and its API is clean.
 However it only works on extension processes implemented as a pure Proc.
 -}
-runSimX env s0 =
-  envReactProcess'
+runSimX env i0 s0 =
+  runReactProcess'
       @(PSimX (Const (SNat 1)) (FakeAlloc2 (SimRunState p) xs_) p x)
-      simXNowM
-      (liftEnv env)
+      (liftProcIO env)
+      i0
       s0
     `evalStateT` newFakeAlloc2
 
@@ -143,7 +138,8 @@ runSimXS
   => SimXProcIface (State p) xs
   => SimXProc xs
   => Proc xs
-  => ProcEnv Tick (SimFullState (State p) xs) m
+  => ProcIO (SimFullState (State p) xs) m
+  -> Tick
   -> SimFullState (State p) xs
   -> m (SimFullState (State p) xs)
 runSimXS =

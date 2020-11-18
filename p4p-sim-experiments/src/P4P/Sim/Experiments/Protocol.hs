@@ -26,8 +26,8 @@ protoOptions =
     <| long "protocol"
     <> short 'p'
     <> metavar "Proto"
-    <> help ("Protocol to use, " <> showOptions @SimProto)
-    <> completeWith (show <$> allOptions @SimProto)
+    <> help ("Protocol to use, " <> enumAllShow @SimProto)
+    <> completeWith (show <$> enumAll @SimProto)
     <> value ProtoEcho
     <> showDefault
 

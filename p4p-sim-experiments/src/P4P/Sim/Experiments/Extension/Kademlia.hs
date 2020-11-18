@@ -27,7 +27,6 @@ import           Data.Binary                      (Binary)
 import           Data.Foldable                    (for_)
 import           Data.Map.Strict                  (Map)
 import           Data.Maybe                       (fromJust)
-import           Data.Void                        (Void)
 import           GHC.Generics                     (Generic)
 
 -- external, p4p

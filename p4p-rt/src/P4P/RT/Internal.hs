@@ -34,8 +34,8 @@ import           Data.Void                      (Void)
 import           GHC.Generics                   (Generic)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
                                                  PMsgO, PMsgO', Proc,
-                                                 ProcEnv (..), ProcIface (..),
-                                                 Tick, envReactProc)
+                                                 ProcIO (..), ProcIface (..),
+                                                 Tick, runReactProc)
 
 -- external, impure
 import qualified Control.Exception              as E
@@ -135,16 +135,14 @@ closeIOAction = void . traverse hClose
 
 data RTError = RTFailedReplayCompare
   { rtFailedReplayCompareType     :: !String
-  , rtFailedReplayCompareTick     :: !Tick
   , rtFailedReplayCompareExpected :: !LBS.ByteString
   , rtFailedReplayCompareActual   :: !LBS.ByteString
   }
     -- ^ Failed to compare replay at the given tick.
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-compareOMsg
-  :: (RTError -> IO ()) -> Tick -> Maybe LBS.ByteString -> Handle -> IO ()
-compareOMsg rtError t mom h = case mom of
+compareOMsg :: (RTError -> IO ()) -> Maybe LBS.ByteString -> Handle -> IO ()
+compareOMsg rtError mom h = case mom of
   Nothing -> hIsEOF h >>= \case
     True  -> pure ()
     False -> err (LBS.pack "<not EOF>") (LBS.pack "<EOF>")
@@ -153,34 +151,35 @@ compareOMsg rtError t mom h = case mom of
     False -> do
       om' <- LBS.hGet h $ fromIntegral $ LBS.length om
       when (om /= om') $ err om' om
-  where err x y = rtError $ RTFailedReplayCompare "procOMsg" t x y
+  where err x y = rtError $ RTFailedReplayCompare "procOMsg" x y
 
 -- | Execution runtime for a process.
 data RTEnv ps m = RTEnv
   { rtClose  :: !(m ())
   , rtStatus :: !(m (Either (NonEmpty RTError) ()))
   , rtError  :: !(RTError -> m ())
-  , rtRunI   :: !(m (Maybe (PMsgI ps)))
-  , rtRunO   :: !(Tick -> [PMsgO ps] -> m ())
+  , rtProcIO :: !(ProcIO ps m)
   }
 
-defaultLog :: Show a => (a -> Bool) -> String -> Handle -> Tick -> a -> IO ()
+defaultLog
+  :: (Show i, Show o)
+  => (Either i o -> Bool)
+  -> String
+  -> Handle
+  -> Tick
+  -> Either i o
+  -> IO ()
 defaultLog f tFmt h t evt = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
-  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> show evt
+  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> case evt of
+    Left  i -> "<- " <> show i
+    Right o -> "-> " <> show o
 
 -- | A type for the runtime to receive input and send output, to a client.
 type RTHiIO ps = (IO (Maybe (HiI ps)), [HiO ps] -> IO ())
 
 -- | A type for the runtime to receive input and send output, to the network.
 type RTLoIO ps = (IO (Maybe (LoI ps)), [LoO ps] -> IO ())
-
--- | Convert a 'runClocked' input to 'GMsgI' format, with 'Nothing' (EOF)
--- lifted to the top of the ADT structure.
-c2i :: Either Tick (Either l h) -> GMsgI Tick l h
-c2i (Left  t        ) = MsgEnv t
-c2i (Right (Left  l)) = MsgLo l
-c2i (Right (Right h)) = MsgHi h
 
 defaultRTWouldInteract :: RTOptions log -> Bool
 defaultRTWouldInteract opt =
@@ -194,28 +193,40 @@ rtTickInterval opt =
       picosPerTick = rtMsTick opt * picosPerMs
   in  interval picosPerTick Ps
 
+-- | Convenience type alias for being able to record-and-relay a protocol.
+--
+-- Note: being able to suspend-and-resume a protocol is just @codec ps@.
+type ProcReRe (codec :: Type -> Constraint) ps
+  = ( codec (EnvI ps)
+    , codec (EnvO ps)
+    , codec (LoI ps)
+    , codec (LoO ps)
+    , codec (HiI ps)
+    , codec (HiO ps)
+    )
+
+-- | Convenience type alias for being able to log a protocol, including AuxO.
+type ProcLog (codec :: Type -> Constraint) ps
+  = (codec (AuxO ps), ProcReRe codec ps)
+
+-- | Convert a 'runClocked' input to 'GMsgI' format, with 'Nothing' (EOF)
+-- lifted to the top of the ADT structure.
+c2i :: Either Tick (Either l h) -> GMsgI Tick l h a
+c2i (Left  t        ) = MsgEnv t
+c2i (Right (Left  l)) = MsgLo l
+c2i (Right (Right h)) = MsgHi h
+
 defaultRT
   :: forall ps log
    . HasNow ps
   => EnvI ps ~ Tick
-  => Show (AuxO ps)
-  => Show (LoO ps)
-  => Show (HiO ps)
-  => Serialise (LoI ps)
-  => Serialise (LoO ps)
-  => Serialise (HiI ps)
-  => Serialise (HiO ps)
+  => ProcLog Show ps
+  => ProcReRe Serialise ps
   => RTOptions log
   -> ps
-  -> Maybe (PMsgO ps -> Bool)
-  -> (  IOClock
-     -> ps
-     -> IO (RTLoIO ps, IO ())
-     )
-  -> (  IOClock
-     -> ps
-     -> IO (RTHiIO ps, IO ())
-     )
+  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
+  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
+  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> ProcIAction Handle
   -> ProcOAction Handle
   -> IO (RTEnv ps IO)
@@ -239,11 +250,11 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
         , pure ()
         )
 
-  rtLog <- case logFilter' of
+  rtLog1 <- case logFilter' of
     Nothing -> pure (\_ _ -> pure ())
     Just logFilter ->
       mkHandle AppendMode rtLogOutput
-        >$> defaultLog @(PMsgO ps) logFilter rtLogTimeFmt
+        >$> defaultLog @(PMsgI ps) @(PMsgO ps) logFilter rtLogTimeFmt
 
   let (rtLoI, rtLoO) = rtLoIO
       (rtHiI, rtHiO) = rtHiIO
@@ -271,6 +282,10 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
       [] -> Right ()
       x  -> Left (fromList (reverse x))
 
+    rtLog t = \case
+      Left  i    -> rtLog1 t (Left i)
+      Right outs -> traverse_ (rtLog1 t . Right) outs
+
     rtRunI = do
       i <- rtI
       whenJust (procIActWrite procIMsg) $ \h -> do
@@ -278,11 +293,12 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
       LBS.hPut devnull $ serialise i -- force to avoid leaking thunks
       pure i
 
-    ignoreAux :: GMsgO a l h -> Maybe (GMsgO Void l h)
+    ignoreAux :: GMsgO e l h a -> Maybe (GMsgO e l h Void)
     ignoreAux = \case
-      MsgEnv _ -> Nothing
+      MsgEnv e -> Just $ MsgEnv e
       MsgLo  l -> Just $ MsgLo l
       MsgHi  h -> Just $ MsgHi h
+      MsgAux _ -> Nothing
 
     onlyHi = \case
       MsgHi ho -> Just ho
@@ -292,13 +308,11 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
       MsgLo lo -> Just lo
       _        -> Nothing
 
-    rtRunO t outs = do
-      for_ outs $ rtLog t
-
+    rtRunO outs = do
       for_ (mapMaybe ignoreAux outs) $ \o -> do
-        let om = serialise (t, o)
+        let om = serialise o
         whenJust (procOActWrite procOMsg) $ flip LBS.hPut om
-        whenJust (procOActCompare procOMsg) $ compareOMsg rtError t (Just om)
+        whenJust (procOActCompare procOMsg) $ compareOMsg rtError (Just om)
 
       case procOActWrite procOMsg of
         -- use rtLoO / rtHiO only if we're not writing output
@@ -310,34 +324,26 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
           rtHiO $ mapMaybe onlyHi outs
         _ -> pure ()
 
+    rtProcIO = ProcIO rtLog rtRunI rtRunO
+
   pure RTEnv { .. }
   where RTOptions {..} = opt
-
-type ProcReRe (codec :: Type -> Constraint) ps
-  = ( codec ps
-    , codec (EnvI ps)
-    , codec (LoI ps)
-    , codec (LoO ps)
-    , codec (HiI ps)
-    , codec (HiO ps)
-    )
 
 runProcIO
   :: forall ps log
    . HasNow ps
   => EnvI ps ~ Tick
-  => Show (AuxO ps)
-  => Show (LoO ps)
-  => Show (HiO ps)
+  => ProcLog Show ps
   => ProcReRe Serialise ps
-  => (ProcEnv Tick ps IO -> ps -> IO ps)
+  => Serialise ps
+  => (ProcIO ps IO -> Tick -> ps -> IO ps)
   -> RTOptions log
   -> IO ps
-  -> Maybe (PMsgO ps -> Bool)
+  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
   -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
   -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO envReact opt mkNewState logFilter mkLoIO mkHiIO =
+runProcIO runReact opt mkNewState logFilter mkLoIO mkHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
     --print opt
     (new, ifs) <- case procIActRead procIState of
@@ -352,12 +358,9 @@ runProcIO envReact opt mkNewState logFilter mkLoIO mkHiIO =
     let (imsg, omsg) = (procIMsg, procOMsg)
         mkRT         = defaultRT @ps opt ifs logFilter mkLoIO mkHiIO imsg omsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
-      let env = ProcEnv rtRunI rtRunO
-      ofs <- onExceptionShow "envReact" $ envReact env ifs
-      let lastTick = getNow ofs
-
+      ofs <- onExceptionShow "runReact" $ runReact rtProcIO (getNow ifs) ifs
       whenJust (procOActCompare procOMsg) $ do
-        compareOMsg rtError lastTick Nothing
+        compareOMsg rtError Nothing
 
       let os = serialise ofs
       whenJust (procOActWrite procOState) $ flip LBS.hPut os
@@ -365,7 +368,7 @@ runProcIO envReact opt mkNewState logFilter mkLoIO mkHiIO =
         rethrow (\e -> annotateIOError e "procOState" Nothing Nothing) $ do
           os' <- LBS.hGetContents h
           when (os /= os') $ do
-            rtError $ RTFailedReplayCompare "procOState" lastTick os' os
+            rtError $ RTFailedReplayCompare "procOState" os' os
 
       rtStatus
   where RTOptions {..} = opt
@@ -375,29 +378,33 @@ runProcIO'
    . Proc ps
   => HasNow ps
   => EnvI ps ~ Tick
-  => Show (AuxO ps)
-  => Show (LoO ps)
-  => Show (HiO ps)
+  => ProcLog Show ps
   => ProcReRe Serialise ps
+  => Serialise ps
   => RTOptions log
   -> IO ps
-  -> Maybe (PMsgO ps -> Bool)
+  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
   -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
   -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO' = runProcIO @ps (envReactProc @ps (pure . getNow))
+runProcIO' = runProcIO runReactProc
 
-defaultRTLogging :: RTOptions RTLogging -> Maybe (GMsgO e l h -> Bool)
+defaultRTLogging
+  :: RTOptions RTLogging
+  -> Maybe (Either (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> Bool)
 defaultRTLogging opt = case rtLogging opt of
   LogNone -> Nothing
-  LogLo   -> Just $ \case
-    MsgLo _ -> True
-    _       -> False
-  LogLoHi -> Just $ \case
-    MsgLo _ -> True
-    MsgHi _ -> True
-    _       -> False
-  LogLoHiEnv -> Just $ const True
+  lv      -> Just (\msg -> fromEnum lv >= msgLv msg)
+ where
+  msgLv :: Either (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> Int
+  msgLv = \case
+    Left  (MsgEnv _) -> 5
+    Right (MsgEnv _) -> 4
+    Left  (MsgHi  _) -> 3
+    Right (MsgHi  _) -> 3
+    Left  (MsgLo  _) -> 2
+    Right (MsgLo  _) -> 2
+    Right (MsgAux _) -> 1
 
 handleRTResult :: Either (NonEmpty RTError) () -> IO ExitCode
 handleRTResult = \case
@@ -409,7 +416,9 @@ handleRTResult = \case
 convertProcData
   :: forall ps xo
    . ProcReRe Serialise ps
-  => ProcReRe Show ps => ProcReRe Read ps => ConvOptions xo -> IO ()
+  => Serialise ps
+  => ProcReRe Show ps
+  => Show ps => ProcReRe Read ps => Read ps => ConvOptions xo -> IO ()
 convertProcData opt = do
   hi  <- mkHandle ReadMode convIFile
   ho  <- mkHandle WriteMode convOFile

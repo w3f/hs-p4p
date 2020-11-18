@@ -26,8 +26,8 @@ extOptions =
     <| long "extension"
     <> short 'x'
     <> metavar "Ext"
-    <> help ("Extension to use, " <> showOptions @SimExt)
-    <> completeWith (show <$> allOptions @SimExt)
+    <> help ("Extension to use, " <> enumAllShow @SimExt)
+    <> completeWith (show <$> enumAll @SimExt)
     <> value ExtNone
     <> showDefault
 

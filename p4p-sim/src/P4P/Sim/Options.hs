@@ -53,12 +53,16 @@ delayedInitMode = \case
 data SimLogging =
     LogNone
     -- ^ Log nothing
-  | LogAllNoUserTicks
-    -- ^ Log all except user output & ticks, which are predictable.
-  | LogAllNoUser
-    -- ^ Log all except user output, which is likely already output elsewhere.
-  | LogAll
-    -- ^ Log everything, pretty spammy.
+  | LogAux
+    -- ^ Log aux messages, from both the simulation framework and its processes.
+  | LogAuxProc
+    -- ^ Also log messages between processes.
+  | LogAuxProcHi
+    -- ^ Also log user messages.
+  | LogAuxProcHiEnvO
+    -- ^ Also log EnvO, i.e. output timing signals.
+  | LogAuxProcHiEnvIO
+    -- ^ Log everything including input ticks - warning very spammy!
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 makeLenses_ ''SimLogging
 
@@ -81,32 +85,21 @@ simLoggingOptions =
   (  option auto
     <| long "logging"
     <> metavar "Logger"
-    <> help ("Logging profile, " <> showOptions @SimLogging)
-    <> completeWith (show <$> allOptions @SimLogging)
+    <> help ("Logging profile, " <> enumAllShow @SimLogging)
+    <> completeWith (show <$> enumAll @SimLogging)
     <> value LogNone
     <> showDefault
     )
-    <|> (   loggerFromInt
+    <|> (   enumFromInt @SimLogging
         <$< length
         <$< many
         <|  flag' ()
         <|  short 'v'
         <>  help
               (  "Logging profile, occurence-counted flag. "
-              <> loggerFromIntStrDesc
+              <> enumAllShowInt @SimLogging
               )
         )
- where
-  loggerFromInt :: Int -> SimLogging
-  loggerFromInt i | i > 2     = LogAll
-                  | i == 2    = LogAllNoUser
-                  | i == 1    = LogAllNoUserTicks
-                  | otherwise = LogNone
-
-  loggerFromIntStrDesc :: String
-  loggerFromIntStrDesc =
-    "0 -> LogNone, 1 -> LogAllNoTicks, 2 -> LogAllNoUser, 3+ -> LogAll."
-
 
 simOptions :: Parser SimOptions
 simOptions =
