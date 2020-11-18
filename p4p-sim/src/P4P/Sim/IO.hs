@@ -21,10 +21,9 @@ import           Data.Foldable                  (traverse_)
 import           Data.Kind                      (Constraint, Type)
 import           Data.List.NonEmpty             (NonEmpty)
 import           Data.Void                      (absurd)
-import           P4P.Proc                       (GMsg (..), PMsgI, PMsgO,
-                                                 ProcIO (..), ProcIface (..),
-                                                 Process (..), Tick,
-                                                 UProtocol (..))
+import           P4P.Proc                       (GMsg (..), ProcIO (..),
+                                                 ProcIface (..), Process (..),
+                                                 Tick, UProtocol (..))
 import           Text.Read                      (readEither)
 
 -- external, IO
@@ -42,76 +41,50 @@ import           P4P.RT                         hiding (RTLogging (..))
 -- internal
 import           P4P.Sim.Extension
 import           P4P.Sim.Internal
-import           P4P.Sim.Options                (SimLogging (..),
+import           P4P.Sim.Options                (SimInitOptions (..),
+                                                 SimLogging (..),
                                                  SimOptions (..))
 import           P4P.Sim.Types
 
 
--- | Convenience type alias for being able to type in and out a simulation.
--- FIXME: tidy these up...
-type SimUserRe ps xs
-  = ( Show ps
-    , Read ps
-    , Show (EnvI ps)
-    , Read (EnvI ps)
-    , Read (LoI ps)
-    , Read (HiI ps)
-    , Show (HiO ps)
-    , Show (LoI ps)     -- as part of HiO we can dump the state, which contains LoI messages
-    , Show (HiI ps)     -- as part of HiO we can dump the state, which contains HiI messages
-    , Show (Addr ps)
-    , Read (Addr ps)
-    , Ord (Addr ps)
-    , Show (Msg ps)
-    , Read (Msg ps)
-    , Read (XHiI xs)
-    , Show (XHiO xs)
-    )
-
-type SimReReP (codec :: Type -> Constraint) ps
-  = ( codec ps
-    , codec (EnvI ps)
+type SimMsgRe (codec :: Type -> Constraint) ps
+  = ( codec (EnvI ps)
     , codec (LoI ps)
     , codec (LoO ps)
     , codec (HiI ps)
     , codec (HiO ps)
     , codec (Addr ps)
-    , codec (Msg ps)
+    , codec ps -- since SimHiI/SimHiO contains ps
     )
 
-type SimReReX (codec :: Type -> Constraint) xs
-  = (codec xs, codec (XHiI xs), codec (XHiO xs))
+type SimRe (codec :: Type -> Constraint) ps = SimMsgRe codec ps
+-- if SimMsgRe did not already contain @codec ps@, this would.
 
--- | Convenience type alias for being able to record and replay a simulation.
-type SimReRe (codec :: Type -> Constraint) ps xs
-  = (SimReReP codec ps, SimReReX codec xs)
+type SimLog (codec :: Type -> Constraint) ps
+  = (SimMsgRe codec ps, codec (EnvO ps), codec (AuxO ps))
 
-type SimLog ps xs
-  = ( Show ps
-    , Show (EnvO ps)
-    , Show (LoO ps)
-    , Show (Addr ps)
-    , Show (PMsgI ps)
-    , Show (PMsgO ps)
-    , Show (HiO ps)
-    , Show (AuxO ps)
-    , Show xs
-    , Show (XHiI xs)
-    , Show (XHiO xs)
-    )
+type SimXMsgRe (codec :: Type -> Constraint) xs
+  = (codec (XHiI xs), codec (XHiO xs))
+
+type SimXRe (codec :: Type -> Constraint) xs = (codec xs, SimXMsgRe codec xs)
+
+type SimXLog (codec :: Type -> Constraint) xs = SimXMsgRe codec xs
+-- the extension doesn't have EnvO or AuxO
 
 grunSimIO
-  :: forall ps xs
-   . SimLog ps xs
-  => SimUserRe ps xs
-  => SimReRe Serialise ps xs
+  :: forall ps xs xo
+   . Ord (Addr ps)
+  => SimLog Show ps
+  => SimXLog Show xs
+  => SimRe Serialise ps
+  => SimXRe Serialise xs
   => UProtocol ps
   => (  ProcIO (SimFullState ps xs) IO
      -> Tick
      -> SimFullState ps xs
      -> IO (SimFullState ps xs)
      )
-  -> SimOptions
+  -> SimOptions xo
   -> IO xs
   -> (Pid -> IO ps)
   -> IO (SimUserIO ps xs, IO ())
@@ -119,21 +92,24 @@ grunSimIO
 grunSimIO runReact opt mkXState mkPState mkSimUserIO =
   runProcIO @(SimFullState ps xs)
     runReact
+    simRTInitOptions
     simRTOptions
     mkNewState
     logFilter
     (\_ _ -> pure ((Just <$> voidInput, traverse_ absurd), pure ()))
     (\_ _ -> mkSimUserIO)
  where
-  SimOptions {..} = opt
+  SimOptions {..}     = opt
+  SimInitOptions {..} = rtInitOpts simRTInitOptions
 
-  mkNewState      = do
-    seed <- getEntropy @ScrubbedBytes 64
+  mkNewState          = do
     let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
     states <- M.traverseWithKey (const . mkPState)
       $ M.fromSet (const ()) initPids
-    SimFullState states (newSimState seed simInitLatency (getAddrs <$> states))
-      <$> mkXState
+    tick <- initializeTick simRTInitOptions
+    seed <- getEntropy @ScrubbedBytes 64
+    let simState = newSimState tick seed simInitLatency (getAddrs <$> states)
+    SimFullState states simState <$> mkXState
 
   logFilter = case rtLogging simRTOptions of
     LogNone -> Nothing
@@ -159,13 +135,12 @@ grunSimIO runReact opt mkXState mkPState mkSimUserIO =
     Right (MsgAux _                         ) -> 1
 
 runSimIO
-  :: forall p
+  :: forall p xo
    . SimProcess p
   => Ctx p IO
-  => SimLog (State p) ()
-  => SimUserRe (State p) ()
-  => SimReRe Serialise (State p) ()
-  => SimOptions
+  => SimLog Show (State p)
+  => SimRe Serialise (State p)
+  => SimOptions xo
   -> (Pid -> IO (State p))
   -> IO (SimUserIO (State p) (), IO ())
   -> IO (Either (NonEmpty RTError) ())
@@ -175,6 +150,27 @@ runSimIO opt =
 
 -- | Equivalent to @(IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())@.
 type SimUserIO ps xs = RTHiIO (SimFullState ps xs)
+
+-- | Convenience type alias for being able to type in and out a simulation.
+type SimUserRe ps xs
+  = ( Ord (Addr ps)
+    , Read (HiI ps)
+    , Show (HiO ps)
+    , Read (XHiI xs)
+    , Show (XHiO xs)
+    -- the remaining are needed because we can input/output SimProcState,
+    -- which contains input messages, address, and the process state
+    , Show ps
+    , Read ps
+    , Show (EnvI ps)
+    , Read (EnvI ps)
+    , Show (HiI ps)
+    -- , Read (HiI ps) -- already mentioned above, mentioned here for clarity
+    , Show (LoI ps)
+    , Read (LoI ps)
+    , Show (Addr ps)
+    , Read (Addr ps)
+    )
 
 defaultSimUserIO :: forall ps xs . SimUserRe ps xs => StdIO -> SimUserIO ps xs
 defaultSimUserIO = defaultRTHiIO @(SimFullState ps xs) readCustom showCustom where

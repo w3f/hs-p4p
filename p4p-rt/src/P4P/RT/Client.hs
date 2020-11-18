@@ -42,11 +42,12 @@ import           System.Posix.Terminal            (queryTerminal)
 -- internal
 import           P4P.RT.Internal                  (RTHiIO,
                                                    defaultRTWouldInteract,
-                                                   rtTickInterval)
+                                                   rtMsTickInterval)
 import           P4P.RT.Network                   (SockEndpoint, fromNAddr,
                                                    resolveEndpoint,
                                                    showSockEndpoint)
-import           P4P.RT.Options                   (RTOptions)
+import           P4P.RT.Options                   (RTInitOptions (..),
+                                                   RTOptions)
 
 
 type StdIO = (IO (Maybe String), String -> IO ())
@@ -133,13 +134,17 @@ optionTerminalStdIO
   :: RTOptions log -> String -> String -> String -> IO (StdIO, IO ())
 optionTerminalStdIO opt = maybeTerminalStdIO (defaultRTWouldInteract opt)
 
-initializeTick :: RTOptions log -> IO Tick
-initializeTick opt = newClockSystem (rtTickInterval opt) >>= clockNow
+initializeTick :: RTInitOptions init -> IO Tick
+initializeTick opt =
+  newClockSystem (rtMsTickInterval (rtInitMsTick opt)) >>= clockNow
 
 initializeTickAddrs
-  :: RTOptions log -> SockEndpoint -> IO (Tick, Observations SockAddr)
-initializeTickAddrs opt ep = resolveEndpoint ep >>= \case
+  :: RTInitOptions init
+  -> (init -> SockEndpoint)
+  -> IO (Tick, Observations SockAddr)
+initializeTickAddrs opt getAddr = resolveEndpoint ep >>= \case
   [] -> fail $ "could not resolve hostname: " <> showSockEndpoint ep
   l  -> do
     tick <- initializeTick opt
     pure (tick, obsPositiveFromList tick $ fromNAddr <$> l)
+  where ep = getAddr (rtInitOpts opt)

@@ -88,11 +88,12 @@ actionOptions =
   ProcIOAction
     <$> (   ProcIAction
         <$> optional
-              (  strOption
-              <| long "istate-r"
-              <> metavar "FILE"
-              <> help
-                   "Read input state from this file. If given, the file must exist. If this not given, then a context-dependent empty initial state will be used, see the rest of the help text for details."
+              (strOption <| long "istate-r" <> metavar "FILE" <> help
+                (  "Read input state from this file. If given, the file must "
+                <> "exist. If this not given, then a context-dependent empty "
+                <> "initial state will be used, see the rest of the help text "
+                <> "for details."
+                )
               )
         <*> optional
               (strOption <| long "istate-w" <> metavar "FILE" <> help
@@ -101,11 +102,11 @@ actionOptions =
         )
     <*> (   ProcIAction
         <$> optional
-              (  strOption
-              <| long "imsg-r"
-              <> metavar "FILE"
-              <> help
-                   "Read input messages from this file. If given, the file must exist. If not given, then messages will be taken from stdin. "
+              (strOption <| long "imsg-r" <> metavar "FILE" <> help
+                ("Read input messages from this file. If given, the file must "
+                <> "exist. If not given, then messages will be taken from "
+                <> "stdin. "
+                )
               )
         <*> optional
               (strOption <| long "imsg-w" <> metavar "FILE" <> help
@@ -294,13 +295,11 @@ rtLogOptions =
         )
 
 data RTOptions log = RTOptions
-  { rtMsTick       :: !Integer
-  -- :^ initial execution config, ignored during replay since it is read
-  , rtProcIOAction :: !(ProcIOAction FilePath)
-  -- :^ IO options, inc. record/replay
-  , rtLogging      :: !log
-  , rtLogOutput    :: !(Either CInt FilePath)
-  , rtLogTimeFmt   :: !String
+  { rtProcIOAction   :: !(ProcIOAction FilePath)
+  , rtLogging        :: !log
+  , rtLogOutput      :: !(Either CInt FilePath)
+  , rtLogTimeFmt     :: !String
+  , rtFFToSystemTick :: !Bool
   }
   deriving (Eq, Show, Read, Generic)
 makeLenses_ ''RTOptions
@@ -308,20 +307,9 @@ makeLenses_ ''RTOptions
 rtOptions :: Parser log -> Parser (RTOptions log)
 rtOptions logOptions =
   RTOptions
-    <$> (  option auto
-        <| long "ms-per-tick"
-        <> short 't'
-        <> metavar "MS"
-        <> help
-             "Milliseconds in a tick. Ignored if reading from existing input messages, i.e. if --imsg-r or --replay or --rere is given."
-        <> value 1
-        <> showDefault
-        )
-
-    <*> allActionOptions
+    <$> allActionOptions
 
     <*> logOptions
-
     <*> (   (   Left
             <$< option auto
             <|  long "log-fd"
@@ -346,6 +334,46 @@ rtOptions logOptions =
         <> value "%Y-%m-%d %H:%M:%S.%3q %z"
         <> showDefault
         )
+
+    <*> (  switch
+        <| long "fast-forward-system-tick"
+        <> short 'y'
+        <> help
+             ("If not replaying i.e. if --imsg-r is not given (inc. --record) "
+             <> "then the runtime will immediately fast-forward the process "
+             <> "tick to the current system tick, instead of continuing "
+             <> "naturally from the tick of any previously-resumed state. "
+             <> "Depending on the protocol this may or may not cause a storm "
+             <> "of attempted outgoing messages in response to timeouts; you "
+             <> "are responsible for any and all consequences."
+             )
+        <> showDefault
+        )
+
+data RTInitOptions init = RTInitOptions
+  { rtInitMsTick :: !Integer
+  , rtInitOpts   :: !init
+  }
+  deriving (Eq, Show, Read, Generic)
+
+rtInitOptions :: Parser init -> Parser (RTInitOptions init)
+rtInitOptions initOptions =
+  RTInitOptions
+    <$> (  option auto
+        <| long "init-ms-per-tick"
+        <> short 't'
+        <> metavar "MS"
+        <> help
+             (  "Initial milliseconds in a tick. Ignored if resuming i.e. if "
+             <> "--istate-r is given (inc. --record/--replay/--rere). If "
+             <> "replaying i.e. if --imsg-r is given (inc. --replay/--rere), "
+             <> "then this is also not in effect, except that its value will "
+             <> "be part of the state, and will take effect when next resumed."
+             )
+        <> value 1
+        <> showDefault
+        )
+    <*> initOptions
 
 data ConvOptions xo = ConvOptions
   { convIFile :: !(Either CInt FilePath)
@@ -401,7 +429,6 @@ defaultDescription synopsis syntax =
     <> "stdout. The syntax is "
     <> syntax
     <> ". Give -v for more detailed output."
-
 
 mkParser :: String -> String -> Parser opt -> ParserInfo opt
 mkParser summary desc parser = info

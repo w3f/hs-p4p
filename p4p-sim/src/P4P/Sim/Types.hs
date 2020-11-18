@@ -62,15 +62,16 @@ type SimState ps = SimState' (PMsgI ps) (Addr ps)
 
 newSimState
   :: (ByteArrayAccess seed, Ord a)
-  => seed
+  => Tick
+  -> seed
   -> SimLatency
   -> Map Pid (Set a)
   -> SimState' i a
-newSimState seed latency addrByPid = SimState 0
-                                              (initialize seed)
-                                              latency
-                                              addrMap
-                                              mempty
+newSimState tick seed latency addrByPid = SimState tick
+                                                   (initialize seed)
+                                                   latency
+                                                   addrMap
+                                                   mempty
  where
   addrMap = M.foldrWithKey' populate M.empty addrByPid
   populate pid addrs m = S.foldr' (M.alter f) m addrs

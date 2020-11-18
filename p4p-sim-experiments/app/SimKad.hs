@@ -22,16 +22,17 @@ import           P4P.Sim.Util                           (ChaChaDRGInsecure,
 
 type KProc = PMut' KS
 
-mkPState :: RTOptions log -> KParams -> Pid -> IO KS
+mkPState :: RTInitOptions init -> KParams -> Pid -> IO KS
 mkPState opt params p = do
   tick <- initializeTick opt
   newRandomState @ChaChaDRGInsecure getEntropy tick [mkAddr p] params
 
 main :: IO ()
 main = do
-  let parser = mkParser "sim-kad" "kademlia test" (simXOptions kadOptions)
-  SimXOptions {..} <- parseArgsIO parser =<< getArgs
-  let rtOpts@RTOptions {..} = simRTOptions simOpts
+  let parser = mkParser "sim-kad" "kademlia test" (simOptions kadOptions)
+  simOpts <- parseArgsIO parser =<< getArgs
+  let SimOptions {..} = simOpts
+  let RTOptions {..}  = simRTOptions
 
   -- auto-join if we're
   --   - not reading input state
@@ -46,7 +47,7 @@ main = do
 
   let mkSimUserIO = do
         (stdio, close) <- do
-          optionTerminalStdIO rtOpts "p4p" ".sim-kad_history" "p4p Kad> "
+          optionTerminalStdIO simRTOptions "p4p" ".sim-kad_history" "p4p Kad> "
         let joinStarted = \case
               KSimJoinStarted -> True
               _               -> False
@@ -62,11 +63,12 @@ main = do
         drg <- initializeFrom getEntropy
         pure $ KSimState drg Nothing
 
-  let params = simXOpts $ fromIntegral $ 1000 `div` rtMsTick
+  let initOpts = simRTInitOptions
+  let params = simXOpts $ fromIntegral $ 1000 `div` rtInitMsTick initOpts
   grunSimIO @KS @KSimState (runSimXS @KProc @KSimState)
                            simOpts'
                            mkXState
-                           (mkPState rtOpts params)
+                           (mkPState initOpts params)
                            mkSimUserIO
     >>= handleRTResult
     >>= exitWith

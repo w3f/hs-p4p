@@ -141,11 +141,11 @@ socketFromEndpoint end select stype protocol = do
 parseRecvAddr :: PortNumber -> Parser SockEndpoint
 parseRecvAddr defPort =
   option (eitherReader (readSockEndpoint defPort))
-    <| long "recv-addr"
+    <| long "init-recv-addr"
     <> short 'r'
     <> metavar "ADDR"
     <> help
-         (  "Endpoint address to receive at. "
+         (  "Initial endpoint address to receive at. "
          <> "Can be DNS:PORT, IPv6:PORT, IPv4:PORT or a UNIX path."
          )
     <> value (EndpointByName "localhost" defPort)

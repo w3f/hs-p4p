@@ -23,19 +23,17 @@ module P4P.Sim
   , runSimX
   , runSimXS
   -- * Options
-  , SimXOptions(..)
   , SimOptions(..)
+  , _simRTInitOptions
   , _simRTOptions
-  , simXOptions
   , simOptions
   , module Options.Applicative
   , module P4P.RT.Options
   -- * IO and utilities
   , SimLog
+  , SimRe
+  , SimXRe
   , SimUserRe
-  , SimReReP
-  , SimReReX
-  , SimReRe
   , defaultSimUserIO
   , grunSimIO
   , runSimIO

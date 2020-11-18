@@ -24,11 +24,11 @@ import           P4P.Sim.Experiments.Protocol
 
 
 type SimPC' ps
-  = (Ord (Addr ps), SimReReP Serialise ps, SimReReP Show ps, SimReReP Read ps)
+  = (Ord (Addr ps), SimRe Serialise ps, SimRe Show ps, SimRe Read ps)
 class SimPC' ps => SimPC ps
 instance SimPC' ps => SimPC ps
 
-type SimXC' xs = (SimReReX Serialise xs, SimReReX Show xs, SimReReX Read xs)
+type SimXC' xs = (SimXRe Serialise xs, SimXRe Show xs, SimXRe Read xs)
 class SimXC' xs => SimXC xs
 instance SimXC' xs => SimXC xs
 

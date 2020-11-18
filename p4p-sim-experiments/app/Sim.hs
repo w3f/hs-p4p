@@ -34,52 +34,49 @@ import           P4P.Sim.Util                 (ChaChaDRGInsecure, PMut',
 
 type SimC' ps
   = ( SimProcess (PMut' ps)
-    , SimLog ps ()
+    , SimLog Show ps
+    , SimRe Serialise ps
     , SimUserRe ps ()
-    , SimReRe Serialise ps ()
     , Proc ps
     )
 class SimC' ps => SimC ps
 instance SimC' ps => SimC ps
 
-mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
-mkPState simOpts prot p = do
-  tick <- initializeTick rtOpts
+mkPState :: RTInitOptions init -> SProt ps -> Pid -> IO ps
+mkPState opts prot p = do
+  tick <- initializeTick opts
   case prot of
     SEcho -> pure $ EchoState (obsPositiveFromList 0 [SockAddrInet p 0]) tick
     SKad  -> do
       let addr   = pack $ "addr:" <> show p
-          params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick rtOpts
+          params = defaultParams $ fromIntegral $ 1000 `div` rtInitMsTick opts
       newRandomState @ChaChaDRGInsecure getEntropy tick [addr] params
-  where rtOpts = simRTOptions simOpts
 
 -- run via stdin/stdout
-runStd :: SimXOptions SimProto -> IO ExitCode
+runStd :: SimOptions SimProto -> IO ExitCode
 runStd opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
-  let mkPS = mkPState simOpts p
+  let mkPS = mkPState simRTInitOptions p
   let mkSimUserIO = do
         let prompt = "p4p " <> drop 5 (show simXOpts) <> "> "
         (stdio, close) <- do
           optionTerminalStdIO simRTOptions "p4p" ".sim_history" prompt
         pure (defaultSimUserIO @ps @() stdio, close)
-  runSimIO @(PMut' ps) simOpts mkPS mkSimUserIO >>= handleRTResult
- where
-  SimXOptions {..} = opt
-  SimOptions {..}  = simOpts
+  runSimIO @(PMut' ps) opt mkPS mkSimUserIO >>= handleRTResult
+  where SimOptions {..} = opt
 
 newtype UserSimAsync' ps = UserSimAsync' (RTAsync (SimFullState ps ()))
 
 -- run via tb-queues, can be loaded from GHCI
-runTB :: SimXOptions SimProto -> IO (DSum SProt UserSimAsync')
+runTB :: SimOptions SimProto -> IO (DSum SProt UserSimAsync')
 runTB opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
-  let mkPS = mkPState simOpts p
+  let mkPS = mkPState simRTInitOptions p
   let runSimIO' simUserIO =
-        runSimIO @(PMut' ps) simOpts mkPS (pure (simUserIO, pure ()))
+        runSimIO @(PMut' ps) opt mkPS (pure (simUserIO, pure ()))
   handles <- newRTAsync @(SimFullState ps ()) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles
-  where SimXOptions {..} = opt
+  where SimOptions {..} = opt
 
-simParseOptions :: Parser xo -> [String] -> IO (SimXOptions xo)
+simParseOptions :: Parser xo -> [String] -> IO (SimOptions xo)
 simParseOptions xopts = parseArgsIO'
   "sim - a simulator for p4p protocols"
   (defaultDescription
@@ -90,7 +87,7 @@ simParseOptions xopts = parseArgsIO'
     <> "(SockAddrInet 3 0, (Fwd, \"Hello, World!\"))"
     )
   )
-  (simXOptions xopts)
+  (simOptions xopts)
 
 main :: IO ()
 main =

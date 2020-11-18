@@ -8,8 +8,8 @@ Stats
   this framework for general requests & protocols
 
 Execution
-- implement adapter from Proc to SProc
-- implement p4p-rt, p4p-rt-quic as described in P4P.Proc.Stream
+- implement p4p-rt-quic as described in P4P.Proc.Stream
+- implement pure adapter from Proc to SProc, and a composition operator for it
 
 Later
 -----
@@ -22,8 +22,6 @@ Abstractions
 Technical debt
 ==============
 
-- RT: when resuming, implement the ability to "skip forward" tickNow to the current system time
-  --init-recv-addr --init-ms-per-tick --resume-system-time
 - update crypto interface
 
 

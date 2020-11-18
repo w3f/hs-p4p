@@ -40,9 +40,9 @@ import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
 -- external, impure
 import qualified Control.Exception              as E
 
-import           Control.Clock.IO               (IOClock, Intv (..),
+import           Control.Clock.IO               (Clock (..), IOClock, Intv (..),
                                                  clockWithIOs, interval,
-                                                 newClock)
+                                                 newClock, newClockSystem)
 import           Control.Clock.IO.Internal      (foreverInterleave)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
                                                  wait)
@@ -187,10 +187,10 @@ defaultRTWouldInteract opt =
     Nothing -> True
     Just _  -> False
 
-rtTickInterval :: RTOptions log -> DiffTime
-rtTickInterval opt =
+rtMsTickInterval :: Integer -> DiffTime
+rtMsTickInterval rtMsTick =
   let picosPerMs   = 1000000000
-      picosPerTick = rtMsTick opt * picosPerMs
+      picosPerTick = rtMsTick * picosPerMs
   in  interval picosPerTick Ps
 
 -- | Convenience type alias for being able to record-and-relay a protocol.
@@ -216,6 +216,27 @@ c2i (Left  t        ) = MsgEnv t
 c2i (Right (Left  l)) = MsgLo l
 c2i (Right (Right h)) = MsgHi h
 
+{- | RT state to be stored alongside process state.
+
+This is a minimal amount of information the RT needs to ensure that resuming
+a suspended process proceeds with similar settings to the original run. This
+does not affect the determinism of the process.
+
+Currently this contains only the clock-rate. Any additions must be thoroughly
+justified including why it can't go elsewhere.
+
+- clock-rate can't go elsewhere as this is an impure detail that is outside of
+  our model of what a pure process is.
+
+In particular, "current tick" and "current addresses" are tracked by the
+process itself as these are details relevant to the pure logic of a protocol.
+-}
+data RTCfg = RTCfg
+  { rtMsTick :: !Integer
+  -- ^ Milliseconds per tick, of the runtime clock.
+  }
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+
 defaultRT
   :: forall ps log
    . HasNow ps
@@ -223,6 +244,7 @@ defaultRT
   => ProcLog Show ps
   => ProcReRe Serialise ps
   => RTOptions log
+  -> RTCfg
   -> ps
   -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
   -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
@@ -230,19 +252,28 @@ defaultRT
   -> ProcIAction Handle
   -> ProcOAction Handle
   -> IO (RTEnv ps IO)
-defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
+defaultRT opt cfg initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
   let initTick = getNow initState
+      intv     = rtMsTickInterval $ rtMsTick cfg
 
   (rtClock, rtLoIO, closeLo, rtHiIO, closeHi) <-
     if defaultRTWouldInteract opt
-         || isNothing (procIActRead procIMsg)
-         || isNothing (procOActWrite procOMsg)
-      then do
-        rtClock           <- newClock initTick (rtTickInterval opt)
+       || isNothing (procIActRead procIMsg)
+       || isNothing (procOActWrite procOMsg)
+    then
+      do
+        rtClock <- if rtFFToSystemTick && isNothing (procIActRead procIMsg)
+          then do
+            sysClock <- newClockSystem intv
+            sysNow   <- clockNow sysClock
+            -- if the process is already ahead of the system then don't use it
+            if sysNow >= initTick then pure sysClock else newClock initTick intv
+          else newClock initTick intv
         (rtLoIO, closeLo) <- mkLoIO rtClock initState
         (rtHiIO, closeHi) <- mkHiIO rtClock initState
         pure (rtClock, rtLoIO, closeLo, rtHiIO, closeHi)
-      else pure
+    else
+      pure
         ( error "programmer error, failed to define rtClock"
         , error "programmer error, failed to define rtLoIO"
         , pure ()
@@ -330,39 +361,40 @@ defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
   where RTOptions {..} = opt
 
 runProcIO
-  :: forall ps log
+  :: forall ps init log
    . HasNow ps
   => EnvI ps ~ Tick
   => ProcLog Show ps
   => ProcReRe Serialise ps
   => Serialise ps
   => (ProcIO ps IO -> Tick -> ps -> IO ps)
+  -> RTInitOptions init
   -> RTOptions log
   -> IO ps
   -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
   -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
   -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO runReact opt mkNewState logFilter mkLoIO mkHiIO =
+runProcIO runReact initOpts opt mkNewState logFilter mkLoIO mkHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
     --print opt
-    (new, ifs) <- case procIActRead procIState of
-      Nothing -> (True, ) <$> mkNewState
+    (cfg, ifs) <- case procIActRead procIState of
+      Nothing -> (RTCfg rtInitMsTick, ) <$> mkNewState
       Just h  -> do
         rethrow (\e -> annotateIOError e "procIState" Nothing Nothing) $ do
           r <- LBS.hGetContents h
-          pure (False, deserialiseNote "procIState read failed" r)
-    whenJust (procIActWrite procIState) $ flip LBS.hPut (serialise ifs)
+          pure $ deserialiseNote "procIState read failed" r
+    whenJust (procIActWrite procIState) $ flip LBS.hPut (serialise (cfg, ifs))
     LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
 
     let (imsg, omsg) = (procIMsg, procOMsg)
-        mkRT         = defaultRT @ps opt ifs logFilter mkLoIO mkHiIO imsg omsg
+        mkRT = defaultRT @ps opt cfg ifs logFilter mkLoIO mkHiIO imsg omsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
       ofs <- onExceptionShow "runReact" $ runReact rtProcIO (getNow ifs) ifs
       whenJust (procOActCompare procOMsg) $ do
         compareOMsg rtError Nothing
 
-      let os = serialise ofs
+      let os = serialise (cfg, ofs)
       whenJust (procOActWrite procOState) $ flip LBS.hPut os
       whenJust (procOActCompare procOState) $ \h -> do
         rethrow (\e -> annotateIOError e "procOState" Nothing Nothing) $ do
@@ -371,17 +403,20 @@ runProcIO runReact opt mkNewState logFilter mkLoIO mkHiIO =
             rtError $ RTFailedReplayCompare "procOState" os' os
 
       rtStatus
-  where RTOptions {..} = opt
+ where
+  RTOptions {..}     = opt
+  RTInitOptions {..} = initOpts
 
 runProcIO'
-  :: forall ps log
+  :: forall ps init log
    . Proc ps
   => HasNow ps
   => EnvI ps ~ Tick
   => ProcLog Show ps
   => ProcReRe Serialise ps
   => Serialise ps
-  => RTOptions log
+  => RTInitOptions init
+  -> RTOptions log
   -> IO ps
   -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
   -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
@@ -425,12 +460,12 @@ convertProcData opt = do
   bs0 <- LBS.hGetContents hi
   unless (LBS.null bs0) $ do
     case someDecodeStream bs0 (allCodecs @(PMsgI ps)) of
-      Right ((k, v), res) -> writeAll ho False k v res
-      Left erri -> case someDecodeStream bs0 (allCodecs @(PMsgO' ps)) of
-        Right ((k, v), res) -> writeAll ho False k v res
-        Left  erro          -> case someDecodeStream bs0 (allCodecs @ps) of
-          Right ((k, v), res) -> writeAll ho True k v res
-          Left  errs          -> do
+      Right result -> writeAll ho False result
+      Left  erri   -> case someDecodeStream bs0 (allCodecs @(PMsgO' ps)) of
+        Right result -> writeAll ho False result
+        Left  erro   -> case someDecodeStream bs0 (allCodecs @(RTCfg, ps)) of
+          Right result -> writeAll ho True result
+          Left  errs   -> do
             let errors =
                   fmap ("imsg : " <>) erri
                     <> fmap ("omsg : " <>) erro
@@ -446,11 +481,9 @@ convertProcData opt = do
     :: (Serialise a, Show a)
     => Handle
     -> Bool
-    -> CodecFormat
-    -> a
-    -> SomeResidue a
+    -> ((CodecFormat, a), SomeResidue a)
     -> IO ()
-  writeAll ho p k v res = do
+  writeAll ho p ((k, v), res) = do
     let showLn' = if p then pShowLn else showLn
     let (enc, i, o) = case k of
           CodecCbor -> (LBS.pack . showLn', CodecCbor, CodecRead)

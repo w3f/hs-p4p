@@ -66,20 +66,6 @@ data SimLogging =
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 makeLenses_ ''SimLogging
 
-data SimOptions = SimOptions
-  { simInitNodes    :: !Int
-  , simInitLatency  :: !SimLatency
-  -- :^ initial execution config, ignored during replay since it is read
-  , simRTOptions    :: !(RTOptions SimLogging)
-  , simDbgEmptySimX :: !Bool
-  -- :^ debugging options
-  }
-  deriving (Eq, Show, Read, Generic)
-makeLenses_ ''SimOptions
-
-knownDistPosReader :: ReadM KnownDistPos
-knownDistPosReader = eitherReader $ readEither >=> distPosToInternal
-
 simLoggingOptions :: Parser SimLogging
 simLoggingOptions =
   (  option auto
@@ -101,15 +87,27 @@ simLoggingOptions =
               )
         )
 
-simOptions :: Parser SimOptions
-simOptions =
-  SimOptions
+data SimInitOptions = SimInitOptions
+  { simInitNodes   :: !Int
+  , simInitLatency :: !SimLatency
+  }
+  deriving (Eq, Show, Read, Generic)
+makeLenses_ ''SimInitOptions
+
+knownDistPosReader :: ReadM KnownDistPos
+knownDistPosReader = eitherReader $ readEither >=> distPosToInternal
+
+simInitOptions :: Parser SimInitOptions
+simInitOptions =
+  SimInitOptions
     <$> (  option auto
         <| long "num-nodes"
         <> short 'n'
         <> metavar "NUM"
         <> help
-             "Initial number of nodes to launch. Ignored if reading from an existing input state, i.e. if --istate-r or --re* is given."
+             (  "Initial number of nodes to launch. Ignored if reading from an "
+             <> "existing input state, i.e. if --istate-r or --re* is given."
+             )
         <> value 1
         <> showDefault
         )
@@ -118,26 +116,33 @@ simOptions =
         <|  long "latency"
         <>  metavar "LAT"
         <>  help
-              "Initial latency distribution, units in tick-delta. Ignored if reading from an existing input state, i.e. if --istate-r or --re* is given."
+              ("Initial latency distribution, units in tick-delta. Ignored if "
+              <> "reading from an existing input state, i.e. if --istate-r or "
+              <> "--re* is given."
+              )
         <>  value (DistConstant 150)
         <>  showDefault
         )
 
-    <*> rtOptions simLoggingOptions
+data SimOptions xo = SimOptions
+  { simRTInitOptions :: !(RTInitOptions SimInitOptions)
+  -- :^ initial execution config, ignored during replay since it is read
+  , simRTOptions     :: !(RTOptions SimLogging)
+  , simDbgEmptySimX  :: !Bool
+  , simXOpts         :: !xo
+  -- :^ debugging options
+  }
+  deriving (Eq, Show, Read, Generic)
+makeLenses_ ''SimOptions
 
+simOptions :: Parser xo -> Parser (SimOptions xo)
+simOptions xopts =
+  SimOptions
+    <$> rtInitOptions simInitOptions
+    <*> rtOptions simLoggingOptions
     <*> (  switch
         <| long "dbg-empty-sim-x"
         <> help "For testing p4p-sim itself: use an empty extension"
         <> showDefault
         )
-
-
-data SimXOptions xo = SimXOptions
-  { simOpts  :: !SimOptions
-  , simXOpts :: !xo
-  }
-  deriving (Eq, Show, Read, Generic)
-makeLenses_ ''SimXOptions
-
-simXOptions :: Parser xo -> Parser (SimXOptions xo)
-simXOptions xopts = SimXOptions <$> simOptions <*> xopts
+    <*> xopts
