@@ -27,7 +27,7 @@ import           Data.Foldable                  (for_, toList, traverse_)
 import           Data.Kind                      (Constraint, Type)
 import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
-import           Data.Maybe                     (mapMaybe)
+import           Data.Maybe                     (isNothing, mapMaybe)
 import           Data.Schedule                  (HasNow (..))
 import           Data.Traversable               (for)
 import           Data.Void                      (Void)
@@ -40,8 +40,9 @@ import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
 -- external, impure
 import qualified Control.Exception              as E
 
-import           Control.Clock.IO               (Intv (..), clockWithIOs,
-                                                 interval, newClock)
+import           Control.Clock.IO               (IOClock, Intv (..),
+                                                 clockWithIOs, interval,
+                                                 newClock)
 import           Control.Clock.IO.Internal      (foreverInterleave)
 import           Control.Concurrent.Async       (async, cancel, link, link2,
                                                  wait)
@@ -50,8 +51,8 @@ import           Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue,
                                                  writeTBQueue)
 import           Control.Concurrent.STM.TVar    (modifyTVar', newTVarIO,
                                                  readTVarIO)
-import           Data.Time                      (defaultTimeLocale, formatTime,
-                                                 getZonedTime)
+import           Data.Time                      (DiffTime, defaultTimeLocale,
+                                                 formatTime, getZonedTime)
 import           Foreign.C.Types                (CInt)
 import           GHC.IO.Handle.FD               (fdToHandle)
 import           System.Directory               (doesPathExist)
@@ -61,7 +62,7 @@ import           System.IO                      (BufferMode (..), Handle,
                                                  hPutStrLn, hSetBuffering,
                                                  openBinaryFile, stderr)
 import           System.IO.Error                (annotateIOError, catchIOError)
-import           UnliftIO.Exception             (bracket, throwIO)
+import           UnliftIO.Exception             (bracket, finally, throwIO)
 
 -- internal
 import           P4P.RT.Internal.Serialise
@@ -187,9 +188,16 @@ defaultRTWouldInteract opt =
     Nothing -> True
     Just _  -> False
 
+rtTickInterval :: RTOptions log -> DiffTime
+rtTickInterval opt =
+  let picosPerMs   = 1000000000
+      picosPerTick = rtMsTick opt * picosPerMs
+  in  interval picosPerTick Ps
+
 defaultRT
   :: forall ps log
-   . EnvI ps ~ Tick
+   . HasNow ps
+  => EnvI ps ~ Tick
   => Show (AuxO ps)
   => Show (LoO ps)
   => Show (HiO ps)
@@ -198,18 +206,38 @@ defaultRT
   => Serialise (HiI ps)
   => Serialise (HiO ps)
   => RTOptions log
-  -> Tick
+  -> ps
   -> Maybe (PMsgO ps -> Bool)
-  -> RTLoIO ps
-  -> RTHiIO ps
+  -> (  IOClock
+     -> ps
+     -> IO (RTLoIO ps, IO ())
+     )
+  -> (  IOClock
+     -> ps
+     -> IO (RTHiIO ps, IO ())
+     )
   -> ProcIAction Handle
   -> ProcOAction Handle
   -> IO (RTEnv ps IO)
-defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
-  let (rtLoI, rtLoO) = rtLoIO
-      (rtHiI, rtHiO) = rtHiIO
-      picosPerMs     = 1000000000
-      picosPerTick   = rtMsTick * picosPerMs
+defaultRT opt initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
+  let initTick = getNow initState
+
+  (rtClock, rtLoIO, closeLo, rtHiIO, closeHi) <-
+    if defaultRTWouldInteract opt
+         || isNothing (procIActRead procIMsg)
+         || isNothing (procOActWrite procOMsg)
+      then do
+        rtClock           <- newClock initTick (rtTickInterval opt)
+        (rtLoIO, closeLo) <- mkLoIO rtClock initState
+        (rtHiIO, closeHi) <- mkHiIO rtClock initState
+        pure (rtClock, rtLoIO, closeLo, rtHiIO, closeHi)
+      else pure
+        ( error "programmer error, failed to define rtClock"
+        , error "programmer error, failed to define rtLoIO"
+        , pure ()
+        , error "programmer error, failed to define rtHiIO"
+        , pure ()
+        )
 
   rtLog <- case logFilter' of
     Nothing -> pure (\_ _ -> pure ())
@@ -217,13 +245,12 @@ defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
       mkHandle AppendMode rtLogOutput
         >$> defaultLog @(PMsgO ps) logFilter rtLogTimeFmt
 
+  let (rtLoI, rtLoO) = rtLoIO
+      (rtHiI, rtHiO) = rtHiIO
+
   (rtI, rtIClose) <- case procIActRead procIMsg of
     -- use rtLoI / rtHiI only if we're not reading input
     Nothing -> do
-      -- FIXME: this needs a bit of re-architecting: actually we want to
-      -- create rtLoIO / rtHiIO only if we're not reading input, and
-      -- additionally they want access to the clock!!!
-      rtClock     <- newClock initTick (interval picosPerTick Ps)
       Clocked r f <- clockWithIOs
         rtClock
         [(Left <$>) <$> rtLoI, (Right <$>) <$> rtHiI]
@@ -237,7 +264,8 @@ defaultRT opt initTick logFilter' rtLoIO rtHiIO procIMsg procOMsg = do
   devnull  <- openBinaryFile systemEmptyFile AppendMode
 
   let
-    rtClose = rtIClose >> hClose devnull
+    rtClose =
+      hClose devnull `finally` rtIClose `finally` closeHi `finally` closeLo
     rtError e = atomically $ modifyTVar' rtErrors $ \ee -> (: ee) $! e
     rtStatus = readTVarIO rtErrors >$> \case
       [] -> Right ()
@@ -306,10 +334,10 @@ runProcIO
   -> RTOptions log
   -> IO ps
   -> Maybe (PMsgO ps -> Bool)
-  -> RTLoIO ps
-  -> (Bool -> IO (Bool, RTHiIO ps))
+  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
+  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> IO (Either (NonEmpty RTError) ())
-runProcIO envReact opt mkNewState logFilter rtLoIO mkRTHiIO =
+runProcIO envReact opt mkNewState logFilter mkLoIO mkHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
     --print opt
     (new, ifs) <- case procIActRead procIState of
@@ -321,10 +349,8 @@ runProcIO envReact opt mkNewState logFilter rtLoIO mkRTHiIO =
     whenJust (procIActWrite procIState) $ flip LBS.hPut (serialise ifs)
     LBS.appendFile systemEmptyFile $ serialise ifs -- force to avoid leaking thunks
 
-    (isInteractive, rtHiIO) <- mkRTHiIO new
     let (imsg, omsg) = (procIMsg, procOMsg)
-        initTick = getNow ifs
-        mkRT = defaultRT @ps opt initTick logFilter rtLoIO rtHiIO imsg omsg
+        mkRT         = defaultRT @ps opt ifs logFilter mkLoIO mkHiIO imsg omsg
     bracket mkRT rtClose $ \rt@RTEnv {..} -> do
       let env = ProcEnv rtRunI rtRunO
       ofs <- onExceptionShow "envReact" $ envReact env ifs
@@ -356,8 +382,8 @@ runProcIO'
   => RTOptions log
   -> IO ps
   -> Maybe (PMsgO ps -> Bool)
-  -> RTLoIO ps
-  -> (Bool -> IO (Bool, RTHiIO ps))
+  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
+  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
   -> IO (Either (NonEmpty RTError) ())
 runProcIO' = runProcIO @ps (envReactProc @ps (pure . getNow))
 

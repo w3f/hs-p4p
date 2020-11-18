@@ -12,6 +12,7 @@ module P4P.Proc.Protocol where
 
 -- external
 import qualified Data.Map.Strict   as M
+import qualified Data.Set          as S
 
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
@@ -19,7 +20,7 @@ import           Data.ByteString   (ByteString)
 import           Data.Function     (on)
 import           Data.Kind         (Type)
 import           Data.Map.Strict   (Map)
-import           Data.Schedule     (Tick)
+import           Data.Schedule     (HasNow, Tick)
 import           Data.Word
 import           GHC.Generics      (Generic)
 
@@ -69,6 +70,9 @@ type Observations a = Map a (Observation Tick)
 obsPositiveFromList :: Ord a => Tick -> [a] -> Observations a
 obsPositiveFromList tick addrs = M.fromList $ (, ObsPositive tick) <$> addrs
 
+obsPositiveToSet :: Observations a -> S.Set a
+obsPositiveToSet = M.keysSet . M.filter obsIsPositive
+
 updateTrustedObs :: Ord a => Observations a -> Observations a -> Observations a
 updateTrustedObs = M.unionWith max
 
@@ -84,8 +88,10 @@ instance 'ProcIface' $ps where
 @
 
 See 'UMsg' for more details.
+
+'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class UProtocol ps where
+class HasNow ps => UProtocol ps where
   {- | Entity address, used for sending and receiving messages.
 
   Depending on the protocol, this may or may not uniquely identify the entity.
@@ -94,6 +100,11 @@ class UProtocol ps where
   type Addr ps = SockAddr
   -- | Main protocol message type, for external communication between entities.
   type Msg ps :: Type
+
+  -- | Get the current receive addresses from the protocol state.
+  --
+  -- This is needed in order to support record-and-replay.
+  getAddrs :: ps -> S.Set (Addr ps)
 
 -- | Local message that encodes actions within 'UProtocol'.
 --

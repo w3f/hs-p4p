@@ -22,6 +22,7 @@ import qualified Data.Map.Strict                   as M
 import qualified Data.Sequence.Extra               as S
 import qualified Data.Strict                       as Z
 import qualified Data.Vector                       as V
+import qualified P4P.Proc                          as P
 
 import           Codec.Serialise                   (Serialise)
 import           Control.Applicative               (liftA2)
@@ -42,14 +43,14 @@ import           Data.Binary                       (Binary)
 import           Data.Bits                         (complement,
                                                     countLeadingZeros, shiftL,
                                                     xor, (.&.), (.|.))
-import           Data.Foldable                     (foldl')
+import           Data.Foldable                     (foldl', toList)
 import           Data.Function                     (on, (&))
 import           Data.Functor.Identity             (runIdentity)
+import           Data.Maybe                        (mapMaybe)
 import           Data.Traversable                  (for)
 import           Data.Tuple.Extra                  (dupe)
 import           Data.Vector.Binary                ()
 import           Data.Word                         (Word16, Word8)
---import           Debug.Pretty.Simple               (pTraceShowId)
 import           GHC.Generics                      (Generic)
 import           Safe.Foldable                     (maximumBound)
 
@@ -329,11 +330,12 @@ checkState State {..} = do
 newState
   :: (R.ByteArrayAccess seed, R.DRG' drg)
   => NodeId
+  -> SC.Tick
   -> [NodeAddr]
   -> seed
   -> KParams
   -> State drg
-newState self addrs seed params = State
+newState self initTick addrs seed params = State
   { kRng       = R.initialize seed
   , kParams    = params
   , kSchedule  = sched
@@ -356,7 +358,7 @@ newState self addrs seed params = State
   KParams {..} = params
   parKeyBits'  = parKeyBits params
   ((refreshes, selfCheck), sched) =
-    runIdentity $ flip runStateT SC.newSchedule $ liftA2
+    runIdentity $ flip runStateT (SC.newScheduleAt initTick) $ liftA2
       (,)
       (for (V.generate parKeyBits' id) $ \i -> do
         -- stagger the refreshes evenly
@@ -370,12 +372,14 @@ newRandomState
   :: forall drg f
    . (R.DRG' drg, Applicative f)
   => (forall seed . R.ByteArray seed => Int -> f seed)
+  -> SC.Tick
   -> [NodeAddr]
   -> KParams
   -> f (State drg)
-newRandomState getEntropy addrs params =
+newRandomState getEntropy initTick addrs params =
   newState @BS.ByteString
     <$> getEntropy (fromIntegral (parKeyBytes params))
+    <*> pure initTick
     <*> pure addrs
     <*> getEntropy (R.seedLength @drg)
     <*> pure params
@@ -441,6 +445,13 @@ ownNodeInfo State {..} = nodeInfoOf kOwnInfo
 
 ownNodeAddrs :: State drg -> KSeq (Z.Pair (Z.Either SC.Tick SC.Tick) NodeAddr)
 ownNodeAddrs State {..} = niNodeAddr $ getNodeInfo kOwnInfo
+
+ownNodeAddrsObs :: State drg -> P.Observations NodeAddr
+ownNodeAddrsObs = M.fromList . mapMaybe onlyRightAddrs . toList . ownNodeAddrs
+ where
+  onlyRightAddrs (a Z.:!: b) = case a of
+    Z.Left  _ -> Nothing
+    Z.Right r -> Just (b, P.ObsPositive r)
 
 kSelf :: State drg -> NodeId
 kSelf = niNodeId . ownNodeInfo

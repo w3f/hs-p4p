@@ -31,17 +31,18 @@ data EchoState = EchoState
   }
   deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
+instance HasNow EchoState where
+  getNow = count
+
 instance UProtocol EchoState where
   type Msg EchoState = EchoMsg
+  getAddrs = obsPositiveToSet . addrs
 
 instance ProcIface EchoState where
   type LoI EchoState = UPMsgI EchoState
   type LoO EchoState = UPMsgO EchoState
   type HiI EchoState = (SockAddr, EchoMsg)
   type HiO EchoState = (SockAddr, EchoMsg)
-
-instance HasNow EchoState where
-  getNow = count
 
 instance Proc EchoState where
   react i s = case i of

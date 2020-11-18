@@ -1,13 +1,13 @@
 {-| P4P runtime library.
 
-This package implements record-and-replay behaviour for "P4P.Proc".
-
-TODO: UDP server.
+This package implements concrete runtime behaviour for "P4P.Proc", including
+suspend-and-resume, record-and-replay, console UI, and UDP networking.
 -}
 module P4P.RT
   ( module P4P.RT.Options
   , RTError(..)
   , RTHiIO
+  , RTLoIO
   , runProcIO
   , runProcIO'
   , defaultRTLogging
@@ -25,6 +25,8 @@ module P4P.RT
   , bracket2
   , onExceptionShow
   , optionTerminalStdIO
+  , initializeTick
+  , initializeTickAddrs
   )
 where
 

@@ -23,7 +23,7 @@ smoke :: IO ()
 smoke = do
   let self = "00000000000000000000000000000000"
   let seed = BS.replicate 40 0
-  let s0 = newState self mempty seed (defaultParams 1000) :: State ChaChaDRG'
+  let s0 = newState self 0 mempty seed (defaultParams 1000) :: State ChaChaDRG'
   r <- runExceptT $ checkState s0
   assertEqual "emptyState passed check" r (Right ())
   let res = kGetNodes self s0

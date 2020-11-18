@@ -13,12 +13,13 @@ import qualified Data.Map.Strict           as M
 import           Codec.Serialise           (Serialise (..), deserialiseOrFail,
                                             serialise)
 import           Control.Monad             (when)
-import           Data.Foldable             (traverse_)
+import           Data.Foldable             (toList, traverse_)
 import           P4P.Proc                  (Observation (..), ProcIface (..),
                                             SockAddr, UMsg (..), UPMsgI, UPMsgO,
                                             UProtocol (..))
 
 -- external, impure
+import           Control.Clock.IO          (Clock (..), IOClock)
 import           Control.Concurrent.MVar   (newMVar, tryTakeMVar)
 import           Network.Socket            hiding (SockAddr)
 import           Network.Socket.ByteString
@@ -30,11 +31,13 @@ import           P4P.RT.Network
 
 
 udpRTLoIO
-  :: Addr ps ~ SockAddr
+  :: UProtocol ps
+  => Addr ps ~ SockAddr
   => LoI ps ~ UPMsgI ps
   => LoO ps ~ UPMsgO ps
-  => Serialise (Msg ps) => SockEndpoint -> IO (RTLoIO ps, IO ())
-udpRTLoIO ep = do
+  => Serialise (Msg ps) => IOClock -> ps -> IO (RTLoIO ps, IO ())
+udpRTLoIO clock ps = do
+  let ep = EndpointByAddr $ toNAddr $ head $ toList $ getAddrs ps
   (sock, addr') <- socketFromEndpoint ep (pure . head) Datagram defaultProtocol
   bind sock addr'
   myAddr <- getSocketName sock >>= newMVar
@@ -50,8 +53,8 @@ udpRTLoIO ep = do
               logErr $ "bad recv: " <> show e
               i -- try again
         Just addr -> do
-          -- FIXME: tick should be Clock's current tick, see FIXME in Internal
-          let firstObs = M.singleton (fromNAddr addr) (ObsPositive 0)
+          now <- clockNow clock
+          let firstObs = M.singleton (fromNAddr addr) (ObsPositive now)
           pure $ Just $ UOwnAddr firstObs
 
       o = \case
@@ -62,9 +65,6 @@ udpRTLoIO ep = do
           when (sent < want) $ do
             logErr $ "short send: " <> show want <> " vs " <> show sent
         UOwnAddr _ -> do
-          -- FIXME: part of fixing this will involve resuming a previous
-          -- session, in that case we should query for the existing address
-          -- and then try to make it take effect
           error "not implemented"
 
   pure ((i, traverse_ o), close sock)

@@ -22,10 +22,10 @@ import           P4P.Sim.Util                           (ChaChaDRGInsecure,
 
 type KProc = PMut' KS
 
-mkPState :: KParams -> Pid -> IO KS
-mkPState params p =
-  let addr = mkAddr p
-  in  newRandomState @ChaChaDRGInsecure getEntropy [addr] params
+mkPState :: RTOptions log -> KParams -> Pid -> IO KS
+mkPState opt params p = do
+  tick <- initializeTick opt
+  newRandomState @ChaChaDRGInsecure getEntropy tick [mkAddr p] params
 
 main :: IO ()
 main = do
@@ -44,23 +44,29 @@ main = do
   let (autoQuit, simOpts') =
         simOpts & _simRTOptions . _rtProcIOAction %%~ delayedInitMode
 
-  let mkStdIO = optionTerminalStdIO rtOpts "p4p" ".sim-kad_history" "p4p Kad> "
-  bracket2 mkStdIO $ \(isInteractive, stdio) -> do
-    let joinStarted = \case
-          KSimJoinStarted -> True
-          _               -> False
-    simUserIO <-
-      hookAutoJoinQuit @_ @KSimState autoJoin autoQuit KSimJoinAll joinStarted
-        $ defaultSimUserIO @KS @KSimState stdio
+  let mkSimUserIO = do
+        (stdio, close) <- do
+          optionTerminalStdIO rtOpts "p4p" ".sim-kad_history" "p4p Kad> "
+        let joinStarted = \case
+              KSimJoinStarted -> True
+              _               -> False
+        simUserIO <-
+          hookAutoJoinQuit @_ @KSimState autoJoin
+                                         autoQuit
+                                         KSimJoinAll
+                                         joinStarted
+            $ defaultSimUserIO @KS @KSimState stdio
+        pure (simUserIO, close)
 
-    drg <- initializeFrom getEntropy
-    let initXState = KSimState drg Nothing
-    let params     = simXOpts $ fromIntegral $ 1000 `div` rtMsTick
-    grunSimIO @KS @KSimState (runSimXS @KProc @KSimState)
-                             simOpts'
-                             initXState
-                             (mkPState params)
-                             isInteractive
-                             simUserIO
-      >>= handleRTResult
-      >>= exitWith
+      mkXState = do
+        drg <- initializeFrom getEntropy
+        pure $ KSimState drg Nothing
+
+  let params = simXOpts $ fromIntegral $ 1000 `div` rtMsTick
+  grunSimIO @KS @KSimState (runSimXS @KProc @KSimState)
+                           simOpts'
+                           mkXState
+                           (mkPState rtOpts params)
+                           mkSimUserIO
+    >>= handleRTResult
+    >>= exitWith

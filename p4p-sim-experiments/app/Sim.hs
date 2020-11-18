@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE GADTs                #-}
-{-# LANGUAGE LambdaCase           #-}
 {-# LANGUAGE PolyKinds            #-}
 {-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE RecordWildCards      #-}
@@ -44,23 +43,26 @@ class SimC' ps => SimC ps
 instance SimC' ps => SimC ps
 
 mkPState :: SimOptions -> SProt ps -> Pid -> IO ps
-mkPState simOpts = \case
-  SEcho -> \p -> pure (EchoState (obsPositiveFromList 0 [SockAddrInet p 0]) 0)
-  SKad  -> \p -> do
-    let params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick procOpts
-        addr   = pack $ "addr:" <> show p
-    newRandomState @ChaChaDRGInsecure getEntropy [addr] params
-  where procOpts = simRTOptions simOpts
+mkPState simOpts prot p = do
+  tick <- initializeTick rtOpts
+  case prot of
+    SEcho -> pure $ EchoState (obsPositiveFromList 0 [SockAddrInet p 0]) tick
+    SKad  -> do
+      let addr   = pack $ "addr:" <> show p
+          params = defaultParams $ fromIntegral $ 1000 `div` rtMsTick rtOpts
+      newRandomState @ChaChaDRGInsecure getEntropy tick [addr] params
+  where rtOpts = simRTOptions simOpts
 
 -- run via stdin/stdout
 runStd :: SimXOptions SimProto -> IO ExitCode
 runStd opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
-  let mkPS    = mkPState simOpts p
-  let prompt  = "p4p " <> drop 5 (show simXOpts) <> "> "
-  let mkStdIO = optionTerminalStdIO simRTOptions "p4p" ".sim_history" prompt
-  bracket2 mkStdIO $ \(iact, stdio) -> do
-    let simUserIO = defaultSimUserIO @ps @() stdio
-    runSimIO @(PMut' ps) simOpts mkPS iact simUserIO >>= handleRTResult
+  let mkPS = mkPState simOpts p
+  let mkSimUserIO = do
+        let prompt = "p4p " <> drop 5 (show simXOpts) <> "> "
+        (stdio, close) <- do
+          optionTerminalStdIO simRTOptions "p4p" ".sim_history" prompt
+        pure (defaultSimUserIO @ps @() stdio, close)
+  runSimIO @(PMut' ps) simOpts mkPS mkSimUserIO >>= handleRTResult
  where
   SimXOptions {..} = opt
   SimOptions {..}  = simOpts
@@ -70,8 +72,9 @@ newtype UserSimAsync' ps = UserSimAsync' (RTAsync (SimFullState ps ()))
 -- run via tb-queues, can be loaded from GHCI
 runTB :: SimXOptions SimProto -> IO (DSum SProt UserSimAsync')
 runTB opt = withSimProto @SimC simXOpts $ \(p :: SProt ps) -> do
-  let mkPS      = mkPState simOpts p
-  let runSimIO' = runSimIO @(PMut' ps) simOpts mkPS False
+  let mkPS = mkPState simOpts p
+  let runSimIO' simUserIO =
+        runSimIO @(PMut' ps) simOpts mkPS (pure (simUserIO, pure ()))
   handles <- newRTAsync @(SimFullState ps ()) (Just print) runSimIO'
   pure $ p :=> UserSimAsync' handles
   where SimXOptions {..} = opt

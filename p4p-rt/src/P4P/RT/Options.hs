@@ -78,7 +78,7 @@ actionOptions =
               <| long "istate-r"
               <> metavar "FILE"
               <> help
-                   "Read input state from this file. If given, the file must exist. If this not given, then a default empty initial state will be used, specific to the protocol chosen."
+                   "Read input state from this file. If given, the file must exist. If this not given, then a context-dependent empty initial state will be used, see the rest of the help text for details."
               )
         <*> optional
               (strOption <| long "istate-w" <> metavar "FILE" <> help

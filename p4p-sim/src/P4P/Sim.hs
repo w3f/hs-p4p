@@ -39,14 +39,14 @@ module P4P.Sim
   , defaultSimUserIO
   , grunSimIO
   , runSimIO
+  , hookAutoJoinQuit
   -- * RT generic utils
   , handleRTResult
   , convertProcData
   , RTAsync(..)
   , newRTAsync
-  , bracket2
-  , hookAutoJoinQuit
   , optionTerminalStdIO
+  , initializeTick
   , KV(..)
   )
 where

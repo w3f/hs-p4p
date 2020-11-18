@@ -36,6 +36,7 @@ module P4P.Proc.Stream where
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
 import           Data.Kind         (Type)
+import           Data.Schedule     (HasNow)
 import           Data.Word
 import           GHC.Generics      (Generic)
 
@@ -86,14 +87,21 @@ instance t'P4P.Proc.ProcIface' $ps where
 @
 
 See 'SMsgI' and 'SMsgO' for more details.
+
+'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class SProtocol ps where
+class HasNow ps => SProtocol ps where
   type Addr ps :: Type
   type Addr ps = SockAddr
   -- | A cryptographic id that uniquely identifies an entity.
   type Pid ps :: Type
   -- | Main protocol message type, for external communication between entities.
   type Msg ps :: Type
+
+  -- | Get the current receive addresses from the protocol state.
+  --
+  -- This is needed in order to support record-and-replay.
+  getAddrs :: ps -> [Addr ps]
 
 -- | Local message that encodes incoming actions within 'SProtocol'.
 data SMsgI pid addr msg =

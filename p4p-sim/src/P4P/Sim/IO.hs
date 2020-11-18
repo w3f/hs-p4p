@@ -113,23 +113,24 @@ grunSimIO
    . SimLog ps xs
   => SimUserRe ps xs
   => SimReRe Serialise ps xs
+  => UProtocol ps
   => (  ProcEnv Tick (SimFullState ps xs) IO
      -> SimFullState ps xs
      -> IO (SimFullState ps xs)
      )
   -> SimOptions
-  -> xs
+  -> IO xs
   -> (Pid -> IO ps)
-  -> Bool
-  -> SimUserIO ps xs
+  -> IO (SimUserIO ps xs, IO ())
   -> IO (Either (NonEmpty RTError) ())
-grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
-  runProcIO @(SimFullState ps xs) runReact
-                                  simRTOptions
-                                  mkNewState
-                                  logFilter
-                                  (Just <$> voidInput, traverse_ absurd)
-                                  mkSimUserIO
+grunSimIO runReact opt mkXState mkPState mkSimUserIO =
+  runProcIO @(SimFullState ps xs)
+    runReact
+    simRTOptions
+    mkNewState
+    logFilter
+    (\_ _ -> pure ((Just <$> voidInput, traverse_ absurd), pure ()))
+    (\_ _ -> mkSimUserIO)
  where
   SimOptions {..} = opt
 
@@ -138,29 +139,14 @@ grunSimIO runReact opt initXState mkPState isInteractive simUserIO =
     let initPids = S.fromList [0 .. pred (fromIntegral simInitNodes)]
     states <- M.traverseWithKey (const . mkPState)
       $ M.fromSet (const ()) initPids
-    pure $ SimFullState states
-                        (newSimState seed simInitLatency initPids)
-                        initXState
+    SimFullState states (newSimState seed simInitLatency (getAddrs <$> states))
+      <$> mkXState
 
   logFilter = case rtLogging simRTOptions of
     LogAll            -> Just $ const True
     LogAllNoUser      -> Just $ logAllNoUser
     LogAllNoUserTicks -> Just $ logAllNoUserTicks @ps
     LogNone           -> Nothing
-  -- inject initial SimResetAddrs when starting out, otherwise we have no addresses
-
-  mkSimUserIO new = if not new
-    then pure (isInteractive, simUserIO)
-    else do
-      let (simUserI, simUserO) = simUserIO
-      injected <- newTVarIO False
-      let simUserI' = do
-            readTVarIO injected >>= \case
-              True  -> simUserI
-              False -> do
-                atomically $ writeTVar injected True
-                pure $ Just SimResetAddrs
-      pure (isInteractive, (simUserI', simUserO))
 
 runSimIO
   :: forall p
@@ -171,12 +157,11 @@ runSimIO
   => SimReRe Serialise (State p) ()
   => SimOptions
   -> (Pid -> IO (State p))
-  -> Bool
-  -> SimUserIO (State p) ()
+  -> IO (SimUserIO (State p) (), IO ())
   -> IO (Either (NonEmpty RTError) ())
 runSimIO opt =
   let run = if simDbgEmptySimX opt then runSimXS @p @() else runSim @p
-  in  grunSimIO @(State p) run opt ()
+  in  grunSimIO @(State p) run opt (pure ())
 
 -- | Equivalent to @(IO (Maybe (SimXHiI ps xs)), [SimXHiO ps xs] -> IO ())@.
 type SimUserIO ps xs = RTHiIO (SimFullState ps xs)

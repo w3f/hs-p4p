@@ -11,16 +11,14 @@ import           P4P.RT.Node
 
 runEcho :: (SockEndpoint, RTOptions RTLogging) -> IO ExitCode
 runEcho (addr, opt) = do
-  let mkStdIO = optionTerminalStdIO opt "p4p" ".echo_history" "p4p-echo> "
-  bracket2 mkStdIO $ \(iact, stdio) -> do
-    bracket2 (udpRTLoIO @EchoState addr) $ \rtLoIO -> do
-      let rtHiIO = defaultRTHiIO @EchoState readEchoHiI showEchoHiO stdio
-      runProcIO' @EchoState opt
-                            (pure (EchoState mempty 0))
-                            (defaultRTLogging opt)
-                            rtLoIO
-                            (const (pure (iact, rtHiIO)))
-        >>= handleRTResult
+  let mkState = uncurry (flip EchoState) <$> initializeTickAddrs opt addr
+      logging = defaultRTLogging opt
+      mkLoIO  = udpRTLoIO @EchoState
+      mkHiIO _ _ = do
+        (stdio, close) <- do
+          optionTerminalStdIO opt "p4p" ".echo_history" "p4p-echo> "
+        pure (defaultRTHiIO @EchoState readEchoHiI showEchoHiO stdio, close)
+  runProcIO' @EchoState opt mkState logging mkLoIO mkHiIO >>= handleRTResult
 
 echoParseOptions :: [String] -> IO (SockEndpoint, RTOptions RTLogging)
 echoParseOptions = parseArgsIO'

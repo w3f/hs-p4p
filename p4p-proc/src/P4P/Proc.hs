@@ -29,6 +29,7 @@ module P4P.Proc
   , obsIsNegative
   , Observations
   , obsPositiveFromList
+  , obsPositiveToSet
   , updateTrustedObs
   , UProtocol(..)
   , UMsg(..)

@@ -12,10 +12,13 @@ module P4P.RT.Client where
 import           Control.Monad.Extra              (unless, untilJustM, whenJust)
 import           Data.Foldable                    (traverse_)
 import           GHC.Generics                     (Generic)
-import           P4P.Proc                         (ProcIface (..))
+import           P4P.Proc                         (Observations, ProcIface (..),
+                                                   SockAddr, Tick,
+                                                   obsPositiveFromList)
 import           Text.Read                        (readEither)
 
 -- external, IO & system
+import           Control.Clock.IO                 (Clock (..), newClockSystem)
 import           Control.Monad.Catch              (MonadMask, bracket, handle,
                                                    onException)
 import           Control.Monad.IO.Class           (MonadIO)
@@ -38,7 +41,11 @@ import           System.Posix.Terminal            (queryTerminal)
 
 -- internal
 import           P4P.RT.Internal                  (RTHiIO,
-                                                   defaultRTWouldInteract)
+                                                   defaultRTWouldInteract,
+                                                   rtTickInterval)
+import           P4P.RT.Network                   (SockEndpoint, fromNAddr,
+                                                   resolveEndpoint,
+                                                   showSockEndpoint)
 import           P4P.RT.Options                   (RTOptions)
 
 
@@ -94,8 +101,7 @@ tryAction action = withInterrupt loop
   loop = handle (\Interrupt -> outputStrLn "Input cancelled" >> loop) action
 
 -- | Set up a nice prompt if on a terminal, otherwise 'defaultStdIO'.
-maybeTerminalStdIO
-  :: Bool -> String -> String -> String -> IO ((Bool, StdIO), IO ())
+maybeTerminalStdIO :: Bool -> String -> String -> String -> IO (StdIO, IO ())
 maybeTerminalStdIO interactive dirname filename prompt = do
   queryTerminal stdInput >>= \case
     True | interactive -> do
@@ -120,9 +126,20 @@ maybeTerminalStdIO interactive dirname filename prompt = do
           -- gets broken by GHC RTS but it still looks bad. If `queryInput`
           -- completes with no exception then the cleanup is redundant anyway.
       o <- queryInput hd getExternalPrint
-      pure ((True, (i, o)), e)
-    _ -> pure ((False, defaultStdIO), pure ())
+      pure ((i, o), e)
+    _ -> pure (defaultStdIO, pure ())
 
 optionTerminalStdIO
-  :: RTOptions log -> String -> String -> String -> IO ((Bool, StdIO), IO ())
+  :: RTOptions log -> String -> String -> String -> IO (StdIO, IO ())
 optionTerminalStdIO opt = maybeTerminalStdIO (defaultRTWouldInteract opt)
+
+initializeTick :: RTOptions log -> IO Tick
+initializeTick opt = newClockSystem (rtTickInterval opt) >>= clockNow
+
+initializeTickAddrs
+  :: RTOptions log -> SockEndpoint -> IO (Tick, Observations SockAddr)
+initializeTickAddrs opt ep = resolveEndpoint ep >>= \case
+  [] -> fail $ "could not resolve hostname: " <> showSockEndpoint ep
+  l  -> do
+    tick <- initializeTick opt
+    pure (tick, obsPositiveFromList tick $ fromNAddr <$> l)

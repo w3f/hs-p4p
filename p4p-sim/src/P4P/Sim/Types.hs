@@ -6,6 +6,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE EmptyDataDeriving     #-}
 {-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TemplateHaskell       #-}
@@ -17,6 +18,7 @@ module P4P.Sim.Types where
 -- external
 import qualified Data.Map.Strict       as M
 import qualified Data.Sequence         as SQ
+import qualified Data.Set              as S
 
 import           Codec.Serialise       (Serialise)
 import           Control.Lens.TH       (makePrisms)
@@ -62,10 +64,20 @@ newSimState
   :: (ByteArrayAccess seed, Ord a)
   => seed
   -> SimLatency
-  -> Set Pid
+  -> Map Pid (Set a)
   -> SimState' i a
-newSimState seed latency pids =
-  SimState 0 (initialize seed) latency mempty (M.fromSet (const mempty) pids)
+newSimState seed latency addrByPid = SimState 0
+                                              (initialize seed)
+                                              latency
+                                              addrMap
+                                              mempty
+ where
+  addrMap = M.foldrWithKey' populate M.empty addrByPid
+  populate pid addrs m = S.foldr' (M.alter f) m addrs
+   where
+    f = \case
+      Nothing   -> Just (S.singleton pid)
+      Just pids -> Just (S.insert pid pids)
 
 -- | Full state of the simulation, including the state of each process.
 data SimFullState ps xs = SimFullState

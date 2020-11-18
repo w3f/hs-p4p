@@ -77,7 +77,6 @@ import           Data.Foldable                     (for_, toList)
 import           Data.Functor.Identity             (Identity (..))
 import           Data.List                         (sortOn)
 import           Data.Map.Bounded                  (ValueAt (..), sizeBMap2)
-import           Data.Maybe                        (mapMaybe)
 import           Data.Tuple                        (swap)
 --import           Debug.Pretty.Simple               (pTraceShowId)
 import           Safe                              (fromJustNote)
@@ -787,7 +786,7 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
           let (reqDst, reqBody) = fst $ oreqIndex $ oreqMsg oreqProc
           oreqResult_ reqDst reqBody (F.GotResult r) icmdOReqResult
   P.MsgLo (P.UOwnAddr obs) -> if null obs
-    then lift $ tell [P.MsgLo $ P.UOwnAddr ownObs]
+    then lift $ tell [P.MsgLo $ P.UOwnAddr $ ownNodeAddrsObs s0]
     else error "not implemented"
  where
   State {..}         = s0
@@ -804,11 +803,6 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
     statewT $ oreqResultFuture_' result reqDst reqBody $ \waiting ->
       fmap runIdentity . runStateWT $ for_ waiting $ \cmdId -> do
         stateWT $ handleResult cmdId reqDst reqBody result
-
-  ownObs = M.fromList $ mapMaybe onlyRightAddrs $ toList $ ownNodeAddrs s0
-  onlyRightAddrs (a Z.:!: b) = case a of
-    Z.Left  _ -> Nothing
-    Z.Right r -> Just (b, P.ObsPositive r)
 
 {- | Top-level input processing function.
 
@@ -841,9 +835,13 @@ kInput'
   :: (R.DRG' g, Monad m) => KadI' -> StateT (State g) (WriterT [KadO] m) ()
 kInput' = tickTask (_kSchedule %%=) P._MsgEnv (stateWT . kInput)
 
+instance SC.HasNow (State g) where
+  getNow = SC.tickNow . kSchedule
+
 instance P.UProtocol (State g) where
   type Addr (State g) = NodeAddr
   type Msg (State g) = Msg
+  getAddrs = P.obsPositiveToSet . ownNodeAddrsObs
 
 instance P.ProcIface (State g) where
   type LoI (State g) = P.UPMsgI (State g)
