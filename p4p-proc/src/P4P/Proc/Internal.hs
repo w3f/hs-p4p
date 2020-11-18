@@ -267,7 +267,7 @@ runReactProc procIO ei0 ps0 = flip execStateT ps0 $ go ei0
       outs <- state $ react i
       procLog ei $ Right outs
       procO outs
-      go $ case i of
+      go $! case i of
         MsgEnv ei' -> ei'
         _          -> ei
 
@@ -288,7 +288,7 @@ runReactProcess procIO ei0 proc = go ei0
       outs <- reactM proc i
       procLog ei $ Right outs
       procO outs
-      go $ case i of
+      go $! case i of
         MsgEnv ei' -> ei'
         _          -> ei
 
