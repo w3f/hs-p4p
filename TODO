@@ -35,6 +35,11 @@ Stats
   - add a command to request debug info
 
 Execution
+! make sure we hFlush output files after a crash, test this
+- --imsg-resume and --omsg-resume -- when --ostate-w is set, instead of
+  writing the state only at the end, periodically write it out, and use
+  the resume files to store messages in case we crash during a period.
+  will probably need to implement crash-proof file-replace and file-append
 - rere AuxO for Sim, so we can see what individual procs send/recv
 
 
