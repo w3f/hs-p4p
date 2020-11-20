@@ -29,12 +29,13 @@ Implemented so far:
 - Suspend execution at arbitrary points into a serialisable state, which can
   be arbitrarily copied and sent to others, e.g. for testing or analysis.
 
-- Resume or fork previously-suspended execution state.
+- Resume or fork previously-suspended execution state, even if it had been
+  originally executed on a different platform.
 
-- Record inputs and outputs, replay an execution on the same inputs and
+- Record inputs and outputs, and replay an execution on the same inputs and
   verify that the outputs are the same i.e. that the implementation indeed is
-  deterministic, run a tweaked execution on slightly different inputs and
-  see how this changes the output and behaviour.
+  deterministic. Replay an execution on slightly different inputs and analyse
+  how this changes the output and behaviour.
 
 - All of the above is achieved *without* invasive low-level tooling, and can
   be done on live production instances. That is, the approach automatically
@@ -91,33 +92,39 @@ achieve in practice, since this includes things such as:
 
 - possibly other things I've overlooked here
 
-In theory, if the kernel records all of this input information, it should be
-able to replay an execution of a program deterministically and reproduce the
-recorded behaviour completely faithfully. So for example, a more sophisticated
-version of DTrace might in theory be able to do this, for all programs.
+In theory, if we record all of this input information, it should be possible to
+replay an execution of a program deterministically and reproduce the recorded
+behaviour completely faithfully. However, this approach has inherent downsides:
 
-However, even if it's theoretically possible, there are still several downsides
-to this approach:
+1. The logic is specific to a particular platform (CPU or kernel), and has to
+   be maintained and extended as new services (i.e. instructions or syscalls)
+   are added to that platform, and used by programs in practise.
 
-- it is very hard to achieve, and has to be maintained and extended as new
-  services (e.g. new hardware support) are added to the operating system.
+2. There is an insane amount of input you have to record, and the irrelevant
+   parts (i.e. thread suspensions unrelated to the application) overwhelm the
+   relevant parts, making the actual application logic hard to analyse. However
+   even the irrelevant parts can contribute to the behaviour of a bug, so they
+   cannot simply be filtered away.
 
-- there is an insane amount of input you have to record, and the uninteresting
-  parts (i.e. thread suspensions unrelated to the application) overwhelm the
-  interesting parts, making the actual application logic hard to analyse.
+3. Replaying all this input will be slow, since it involves recreating their
+   low-level context accurately, which would likely involve more overhead than
+   running them in their "natural" original way.
 
-- replaying all of this input will be slow, since it involves recreating
-  low-level details accurately, which intuitively would probably involve more
-  overhead than running them in their "natural" original way.
+In fact, there are several existing system that attempt to do this, making
+various design compromises in order to alleviate some of the above. However,
+these downsides really are inherent to this approach and cannot be resolved to
+our satisfaction. We give a more detailed `Comparison`_ further below; but
+please read onwards to first understand what our different approach is.
+
 
 Principles
 ==========
 
-In this library we take a different approach. Instead of using a very rich
-runtime environment, we purposefully only provide a greatly simplified one.
-Programs must be defined as pure state machines, that can only interact with
-this runtime via a stream of inputs and outputs. In addition, the inputs,
-outputs, and execution state must all be serialisable.
+Instead of having a very rich runtime environment, in this library our approach
+is to purposefully only provide a greatly simplified one. Programs must be
+defined as pure state machines, that can only interact with this runtime via a
+stream of inputs and outputs. In addition, the inputs, outputs, and execution
+state must all be serialisable.
 
 These constraints give us the ability to execute programs deterministically,
 and to do advanced high-level things with their execution, such as those listed
@@ -196,6 +203,50 @@ to optimise away unnecessary state copies whilst retaining the ability to clone
 the whole state at will.
 
 .. _Debian language benchmarks: https://benchmarksgame-team.pages.debian.net/benchmarksgame/which-programs-are-fastest.html
+
+Comparisons
+-----------
+
+Several existing systems implement the low-level approach we described earlier,
+that works to record-and-replay existing programs. This was a major requirement
+of theirs and has several downsides; it is not a major requirement of ours
+hence we chose our different approach, which fully addresses these downsides.
+
+Generally, these systems focus on the use-case of step-through debugging, where
+you step through a program and examine its state at different points during its
+execution. This is always useful; however in our experience debugging complex
+protocol software running on production servers, we also need the ability to
+analyse whole-execution log traces. Often, a bug is caused by multiple systems
+acting together, and step-through debugging is too slow at giving you the full
+picture of what happened.
+
+But all of these systems inherently suffer from too much input, as described
+earlier in `Background`_, so their logs are much less useful. Filtering away
+the irrelevant input doesn't work either, since it may be a critical part of
+why a bug exists and how it behaves. (Some systems filter out determinstic
+input but retain non-deterministic input; a large part of the latter is still
+irrelevant and analysing these logs for debugging is not practical.) With our
+approach, such irrelevant input does not exist in the first place.
+
+Other issues include:
+
+- They only work on certain CPUs that provide faster instructions to perform
+  the recording with. Sometimes these instructions are buggy, because they are
+  not normally run during production, and so have had less attention on them.
+
+- There are two general approaches, neither of which is satisfactory to us:
+
+  - Full-system recording is very slow and suffers from all of the problems
+    we mentioned above. It can support true multi-threaded programs, but the
+    speed reduction makes it unsuitable for running in production.
+
+  - User-space recording is much faster, and can be run in production like our
+    approach. However it is inherently unable to support suspend-and-resume
+    capabilities - it fails to record state from the kernel that is relevant to
+    the high-level logic of the program, e.g. the state of timers, or of listen
+    sockets, etc. Programs must write cross-platform logic to support this;
+    with our approach this ability comes for free for every program.
+
 
 Challenges
 ==========
