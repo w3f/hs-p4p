@@ -42,6 +42,10 @@ udpRTLoIO clock ps = do
   bind sock addr'
   myAddr <- getSocketName sock >>= newMVar
 
+  -- TODO: it is more accurate to use the techniques described here:
+  -- https://blog.powerdns.com/2012/10/08/on-binding-datagram-udp-sockets-to-the-any-addresses/
+  -- this becomes necessary when we support binding on multiple sockets
+  -- probably much of the work should be filed upstream to Network.Socket
   let logErr s = hPutStrLn stderr $ "udpRTLoIO: " <> s
       i = tryTakeMVar myAddr >>= \case
         Nothing -> do
