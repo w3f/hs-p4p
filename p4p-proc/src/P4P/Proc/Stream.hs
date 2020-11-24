@@ -105,7 +105,7 @@ class HasNow ps => SProtocol ps where
 
 -- | Local message that encodes incoming actions within 'SProtocol'.
 data SMsgI pid addr msg =
-    SIAddrs !pid !(Observations addr)
+    SAddrsI !pid !(Observations addr)
     {- ^ The lower layer informs the process about id-address mappings.
 
     This is based on the lower layer's observations, e.g. observing a response
@@ -120,6 +120,15 @@ data SMsgI pid addr msg =
     -- ^ We received a message on a stream.
   | SOReady !pid !StreamId
     -- ^ We are ready to send another message on the given outgoing stream.
+  | SResetAll !pid
+    {- ^ Our connection to the peer was reset.
+
+    Any local state associated with all streams is now invalid and should be
+    discarded. This should only matter for protocols that stitch together
+    'ByteString' chunks from the stream and parse it into something else, since
+    they need to remember the unparsed residue from the previous chunk. Any
+    logic that is higher than this, should be able to just ignore this signal.
+    -}
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 {- | Local message that encodes outgoing actions within 'SProtocol'.
@@ -127,7 +136,7 @@ data SMsgI pid addr msg =
 TODO: add bandwidth-limiting commands.
 -}
 data SMsgO pid addr msg =
-    SOAddrs !pid !(Observations addr)
+    SAddrsO !pid !(Observations addr)
     {- ^ The process informs the lower layer about id-address mappings.
 
     This is based on the protocol's observations at its higher layer, e.g.
