@@ -35,7 +35,7 @@ data EchoState = EchoState
 instance HasNow EchoState where
   getNow = count
 
-instance UProtocol EchoState where
+instance Protocol EchoState where
   type XMsg EchoState = EchoMsg
   getAddrs = obsPositiveToSet . addrs
 
@@ -45,6 +45,8 @@ instance ProcIface EchoState where
   type HiI EchoState = (SockAddr, EchoMsg)
   type HiO EchoState = (SockAddr, EchoMsg)
   type AuxO EchoState = ProtocolCodecError
+
+instance UProtocol EchoState where
 
 instance Proc EchoState where
   react = withCodec cborCodec16 id $ \i s -> case i of

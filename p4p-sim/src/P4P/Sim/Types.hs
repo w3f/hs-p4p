@@ -33,7 +33,7 @@ import           Data.Void             (Void, absurd)
 import           Data.Word             (Word16)
 import           GHC.Generics          (Generic)
 import           P4P.Proc              (GMsgI, GMsgO, PMsgI, PMsgO,
-                                        ProcIface (..), UProtocol (..))
+                                        ProcIface (..), Protocol (..))
 
 -- internal
 import           P4P.Sim.Numeric

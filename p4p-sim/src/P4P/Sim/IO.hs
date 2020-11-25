@@ -23,7 +23,7 @@ import           Data.List.NonEmpty             (NonEmpty)
 import           Data.Void                      (absurd)
 import           P4P.Proc                       (GMsg (..), ProcIO (..),
                                                  ProcIface (..), Process (..),
-                                                 Tick, UProtocol (..))
+                                                 Protocol (..), Tick, UProtocol)
 import           Text.Read                      (readEither)
 
 -- external, IO

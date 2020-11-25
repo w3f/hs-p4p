@@ -13,8 +13,8 @@ guarantees on ordering. For extras, we also throw in transport-level security,
 which also lets us uniquely identify protocol entities.
 
 To this end, here we present another protocol type 'SProtocol', a simple
-abstract model of linearly-ordered flow-controlled streams between two peers.
-A t'P4P.Proc.Process' can then use this for its lower interface as required.
+abstract model of linearly-ordered flow-controlled multiple streams between two
+peers. A t'P4P.Proc.Process' can use this for its lower interface as required.
 
 Such a process can be run on an enriched runtime that supports 'SProtocol',
 such as @p4p-rt-quic@. Note that this is not an ideal solution that adheres to
@@ -33,19 +33,17 @@ temporary compromise solution.
 module P4P.Proc.Stream where
 
 -- external
-import qualified Data.Set          as S
-
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
 import           Data.ByteString   (ByteString)
 import           Data.Kind         (Type)
-import           Data.Schedule     (HasNow)
 import           Data.Void         (Void)
 import           Data.Word
 import           GHC.Generics      (Generic)
 
 -- internal
 import           P4P.Proc.Internal (GMsgI, GMsgO, ProcIface (..))
+import           P4P.Proc.Protocol (Protocol (..))
 import           P4P.Proc.Types
 
 
@@ -70,9 +68,9 @@ data StreamId = StreamId !Word8 !Word16 !Word32
 
 Fully identifies a stream in the context of a process.
 -}
-type StreamFullId pid = (pid, Direction, StreamId)
+type StreamFullId eid = (eid, Direction, StreamId)
 
-{- | Stream-capable protocol.
+{- | Secure linearly-ordered flow-controlled multi-stream-based protocol.
 
 Our API focuses on convenience - under normal usage, streams are opened and
 closed implicitly by the lower layer; one does not have to explicitly do this
@@ -81,7 +79,7 @@ nor worry about whether a stream is open or closed.
 OTOH, under certain circumstances we do provide the ability to tell the lower
 layer to open or close a stream if really needed; see 'SMsgO' for details.
 
-When defining this instance for your @$ps@, you should also define:
+When defining this instance for your @$ps@, you must also define:
 
 @
 instance t'P4P.Proc.ProcIface' $ps where
@@ -91,44 +89,29 @@ instance t'P4P.Proc.ProcIface' $ps where
 @
 
 See 'SMsgI' and 'SMsgO' for more details.
-
-'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class (HasNow ps, LoI ps ~ SPMsgI ps, LoO ps ~ SPMsgO ps) => SProtocol ps where
-  {- | Entity address, used for sending and receiving messages.
-
-  Depending on the protocol, this may or may not uniquely identify the entity.
-  -}
-  type Addr ps :: Type
-  type Addr ps = SockAddr
+class (Protocol ps, LoI ps ~ SPMsgI ps, LoO ps ~ SPMsgO ps) => SProtocol ps where
   -- | A cryptographic id that uniquely identifies an entity.
-  type Pid ps :: Type
-  -- | Main protocol message type, for external communication between entities.
-  type XMsg ps :: Type
-
-  -- | Get the current receive addresses from the protocol state.
-  --
-  -- This is needed in order to support record-and-replay.
-  getAddrs :: ps -> S.Set (Addr ps)
+  type Eid ps :: Type
 
 -- | Local message that encodes incoming actions within 'SProtocol'.
-data SMsgI pid addr msg =
-    SAddrsI !pid !(Observations addr)
+data SMsgI eid addr msg =
+    SAddrsI !eid !(Observations addr)
     {- ^ The lower layer informs the process about id-address mappings.
 
     This is based on the lower layer's observations, e.g. observing a response
     from a network address.
 
-    If @pid@ is our own identity, then this has the same semantics as
+    If @eid@ is our own identity, then this has the same semantics as
     t'P4P.Proc.Protocol.UOwnAddr' in the 'Incoming' context. (We assume that
     the lower layer knows our own identity via out-of-band means, e.g. during
     initialisation.)
     -}
-  | SIRecv !pid !StreamId !msg
+  | SIRecv !eid !StreamId !msg
     -- ^ We received a message on a stream.
-  | SOReady !pid !StreamId
+  | SOReady !eid !StreamId
     -- ^ We are ready to send another message on the given outgoing stream.
-  | SResetAll !pid
+  | SResetAll !eid
     {- ^ Our connection to the peer was reset.
 
     Any local state associated with all streams is now invalid and should be
@@ -143,24 +126,24 @@ data SMsgI pid addr msg =
 
 TODO: add bandwidth-limiting commands.
 -}
-data SMsgO pid addr msg =
-    SAddrsO !pid !(Observations addr)
+data SMsgO eid addr msg =
+    SAddrsO !eid !(Observations addr)
     {- ^ The process informs the lower layer about id-address mappings.
 
     This is based on the protocol's observations at its higher layer, e.g.
     observing a signed response from other network peers.
 
-    If @pid@ is our own identity, then this has the same semantics as
+    If @eid@ is our own identity, then this has the same semantics as
     t'P4P.Proc.Protocol.UOwnAddr' in the 'Outgoing' context. (We assume that
     the lower layer knows our own identity via out-of-band means, e.g. during
     initialisation.)
     -}
-  | SOSend !pid !StreamId !msg
+  | SOSend !eid !StreamId !msg
     {- ^ Send a message on a stream.
 
     Since this is a flow-controlled protocol, we may not send outgoing messages
-    arbitrarily to other processes. We may only send a message @'SOSend' pid
-    sid msg@ on a given stream @s := (pid, 'Outgoing', sid)@ if:
+    arbitrarily to other processes. We may only send a message @'SOSend' eid
+    sid msg@ on a given stream @s := (eid, 'Outgoing', sid)@ if:
 
     - @s@ is a new stream i.e. we have not previously-sent a message on @s@, or
     - we have received a 'SOReady' for @s@ after any previously-sent message on @s@
@@ -168,7 +151,7 @@ data SMsgO pid addr msg =
     If these preconditions are not met, the runtime may panic or throw an
     error. t'P4P.Proc.Util.FlowControl' contains utils to ensure these are met.
     -}
-  | SIAccept !pid !StreamId !Bool
+  | SIAccept !eid !StreamId !Bool
     {- ^ Whether to receive messages on the given incoming stream.
 
     This starts off being @True@ for all streams. However if the lower layer
@@ -183,7 +166,7 @@ data SMsgO pid addr msg =
     long-term memory usage of many many open streams. Note that QUIC streams
     are lightweight so the latter is typically not a concern.
     -}
-  | SIAllow !pid !Bool
+  | SIAllow !eid !Bool
     {- ^ Whether to receive messages on any stream of the given peer.
 
     This starts off being @True@ for all peers.
@@ -199,13 +182,13 @@ data SMsgO pid addr msg =
     -}
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-type SPMsgI ps = SMsgI (Pid ps) (Addr ps) ByteString
-type SPMsgO ps = SMsgO (Pid ps) (Addr ps) ByteString
+type SPMsgI ps = SMsgI (Eid ps) (Addr ps) ByteString
+type SPMsgO ps = SMsgO (Eid ps) (Addr ps) ByteString
 
 -- | Variant of 'SPMsgI' that preserves the external message type.
-type SPMsgI' ps = SMsgI (Pid ps) (Addr ps) (ExtVal (XMsg ps))
+type SPMsgI' ps = SMsgI (Eid ps) (Addr ps) (ExtVal (XMsg ps))
 -- | Variant of 'SPMsgO' that preserves the external message type.
-type SPMsgO' ps = SMsgO (Pid ps) (Addr ps) (ExtVal (XMsg ps))
+type SPMsgO' ps = SMsgO (Eid ps) (Addr ps) (ExtVal (XMsg ps))
 
 -- | Variant of 'PMsgI' that preserves the external message type.
 type PMsgI' ps = GMsgI (EnvI ps) (SPMsgI' ps) (HiI ps) Void

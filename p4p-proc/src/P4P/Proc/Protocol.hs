@@ -25,9 +25,34 @@ import           P4P.Proc.Internal
 import           P4P.Proc.Types
 
 
-{- | Protocol sending unordered unreliable datagrams, the simplest protocol.
+{- | Protocol abstraction.
 
-When defining this instance for your @$ps@, you should also define:
+Our definition of a "protocol" is a process that talks to external processes,
+as opposed to other internal processes, via a runtime at its lower interface.
+
+The particular method of communication is represented by further abstractions
+that subclass this, e.g. 'UProtocol', that constrain both 'LoI' and 'LoO'.
+
+'HasNow' is a superclass, in order to support record-and-replay.
+-}
+class HasNow ps => Protocol ps where
+  {- | Entity address, used for sending and receiving messages.
+
+  Depending on the protocol, this may or may not uniquely identify the entity.
+  -}
+  type Addr ps :: Type
+  type Addr ps = SockAddr
+  -- | External protocol message type, for communication between entities.
+  type XMsg ps :: Type
+
+  -- | Get the current receive addresses from the protocol state.
+  --
+  -- This is needed in order to support record-and-replay.
+  getAddrs :: ps -> S.Set (Addr ps)
+
+{- | The simplest protocol, based on unordered unreliable datagrams.
+
+When defining this instance for your @$ps@, you must also define:
 
 @
 instance 'ProcIface' $ps where
@@ -37,23 +62,8 @@ instance 'ProcIface' $ps where
 @
 
 See 'UMsg' for more details.
-
-'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class (HasNow ps, LoI ps ~ UPMsgI ps, LoO ps ~ UPMsgO ps) => UProtocol ps where
-  {- | Entity address, used for sending and receiving messages.
-
-  Depending on the protocol, this may or may not uniquely identify the entity.
-  -}
-  type Addr ps :: Type
-  type Addr ps = SockAddr
-  -- | Main protocol message type, for external communication between entities.
-  type XMsg ps :: Type
-
-  -- | Get the current receive addresses from the protocol state.
-  --
-  -- This is needed in order to support record-and-replay.
-  getAddrs :: ps -> S.Set (Addr ps)
+class (Protocol ps, LoI ps ~ UPMsgI ps, LoO ps ~ UPMsgO ps) => UProtocol ps where
 
 -- | Type alias for the address of a process.
 type ProcAddr p = Addr (State p)

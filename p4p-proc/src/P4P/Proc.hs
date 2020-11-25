@@ -41,8 +41,9 @@ module P4P.Proc
   , runReactProcess
   , runReactProcess'
   -- protocol
+  , Protocol(..)
   , UMsg(..)
-  , UProtocol(..)
+  , UProtocol
   , UMsgI
   , UMsgO
   , UPMsgI

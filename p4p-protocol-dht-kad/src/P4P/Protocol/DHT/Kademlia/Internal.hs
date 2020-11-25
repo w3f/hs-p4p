@@ -840,7 +840,7 @@ kInput' = tickTask (_kSchedule %%=) P._MsgEnv (stateWT . kInput)
 instance SC.HasNow (State g) where
   getNow = SC.tickNow . kSchedule
 
-instance P.UProtocol (State g) where
+instance P.Protocol (State g) where
   type Addr (State g) = NodeAddr
   type XMsg (State g) = Msg
   getAddrs = P.obsPositiveToSet . ownNodeAddrsObs
@@ -851,6 +851,8 @@ instance P.ProcIface (State g) where
   type HiI (State g) = KHiI
   type HiO (State g) = KHiO
   type AuxO (State g) = KLogMsg
+
+instance P.UProtocol (State g) where
 
 instance R.DRG' g => P.Proc (State g) where
   react = P.withCodec @(State g) P.cborCodec16 W_ProtocolDecodeError

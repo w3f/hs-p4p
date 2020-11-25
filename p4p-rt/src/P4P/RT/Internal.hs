@@ -39,8 +39,8 @@ import           GHC.Generics                   (Generic)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
                                                  PMsgI', PMsgO, PMsgO_, PMsgO_',
                                                  Proc, ProcIO (..),
-                                                 ProcIface (..), Tick,
-                                                 UProtocol (..), runReactProc)
+                                                 ProcIface (..), Protocol (..),
+                                                 Tick, runReactProc)
 
 -- external, impure
 import qualified Control.Exception              as E

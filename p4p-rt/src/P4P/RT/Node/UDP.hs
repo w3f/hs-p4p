@@ -14,8 +14,8 @@ import qualified Data.Text.Extra           as T
 import           Control.Monad             (when)
 import           Data.Foldable             (toList, traverse_)
 import           Data.Text                 (Text)
-import           P4P.Proc                  (Observation (..), SockAddr,
-                                            UMsg (..), UProtocol (..))
+import           P4P.Proc                  (Observation (..), Protocol (..),
+                                            SockAddr, UMsg (..), UProtocol)
 
 -- external, impure
 import           Control.Clock.IO          (Clock (..), IOClock)
