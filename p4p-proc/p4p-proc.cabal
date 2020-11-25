@@ -66,28 +66,30 @@ Common executable
 Library
   Import: generic
   Build-Depends:
-      extra
+      p4p-common
+    , extra
     , binary
     , bytestring
     , containers
     , lens
-    , mutable-lens (>= 0.3)
+    , mutable-lens  (>= 0.3)
     , mtl
     , op
     , primitive
     , schedule
-    , serialise
+    , serialise     (>= 0.2.4.0)
+    , text
     , transformers
     -- P4P.Proc.Util
     , smash
   HS-Source-Dirs: src
   Exposed-Modules:
     P4P.Proc
-    P4P.Proc.Lens
     P4P.Proc.Internal
     P4P.Proc.Instances
     P4P.Proc.Protocol
     P4P.Proc.Stream
+    P4P.Proc.Types
     P4P.Proc.Util
     P4P.Proc.Util.FlowControl
 
@@ -104,6 +106,10 @@ Test-Suite unit
   Build-Depends:
       tasty
     , tasty-hunit
+    , p4p-proc
+    , binary
+    , bytestring
+    , serialise
   HS-Source-Dirs: test
   Type: exitcode-stdio-1.0
   Main-Is: UnitTests.hs

@@ -120,7 +120,7 @@ replyForRequest
   -> KadO
 replyForRequest srcAddr req@Msg {..} reply now = case body of
   Right _            -> error "input message was not a request"
-  Left  Request {..} -> P.MsgLo $ P.UData srcAddr $ Msg
+  Left  Request {..} -> P.MsgLo $ P.UData srcAddr $ P.Val $ Msg
     { src  = dst
     , dst  = src
     , sent = now
@@ -223,6 +223,8 @@ data KLogMsg =
     W_SelfCheckFailed !String
     -- ^ A self-check failed.
     -- This suggests a major programming error.
+  | W_ProtocolDecodeError !P.ProtocolCodecError
+    -- ^ Message failed to decode or encode.
   | W_InvalidMessage !Msg !String
     -- ^ Top-level processing ignored an invalid message.
     -- This means someone on the network is playing tricks with us.
@@ -265,9 +267,10 @@ data KLogMsg =
 type KHiI = Command
 type KHiO = CommandReply
 
-type KadI' = P.GMsgI SC.Tick (P.UMsgI NodeAddr Msg) KHiI P.Void
-type KadI = P.GMsgI (SC.Tick, KTask) (P.UMsgI NodeAddr Msg) KHiI P.Void
-type KadO = P.GMsgO SC.Tick (P.UMsgO NodeAddr Msg) KHiO KLogMsg
+type KadI' = P.GMsgI SC.Tick (P.UMsgI NodeAddr (P.ExtVal Msg)) KHiI P.Void
+type KadI
+  = P.GMsgI (SC.Tick, KTask) (P.UMsgI NodeAddr (P.ExtVal Msg)) KHiI P.Void
+type KadO = P.GMsgO SC.Tick (P.UMsgO NodeAddr (P.ExtVal Msg)) KHiO KLogMsg
 
 kLog :: KLogMsg -> KadO
 kLog = P.MsgAux

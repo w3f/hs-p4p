@@ -271,13 +271,12 @@ data RTLogging =
   | LogAuxLoHiEnvIO
     -- ^ Log everything including input ticks - warning very spammy!
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
-makeLenses_ ''RTLogging
 
 rtLogOptions :: Parser RTLogging
 rtLogOptions =
   (  option auto
     <| long "logging"
-    <> metavar "Logger"
+    <> metavar "LOGLVL"
     <> help ("Logging profile, " <> enumAllShow @RTLogging)
     <> completeWith (show <$> enumAll @RTLogging)
     <> value LogNone
@@ -375,16 +374,22 @@ rtInitOptions initOptions =
         )
     <*> initOptions
 
-data ConvOptions xo = ConvOptions
+data ConvOptions = ConvOptions
   { convIFile :: !(Either CInt FilePath)
   , convOFile :: !(Either CInt FilePath)
-  , convXOpts :: !xo
+  , convTyped :: !Bool
+  {- ^ Treat external messages as a typed value instead of a raw bytestring.
+
+  I.e., in @('MsgLo' ('UData' src payload))@, setting this 'True' will encode /
+  decode @payload@ as a @('ExtVal' ('XMsg' ps))@ instead of as 'ByteString'.
+  This only makes a difference for internal codecs such as Show/Read.
+  -}
   }
   deriving (Eq, Show, Read, Generic)
 makeLenses_ ''ConvOptions
 
-convOptions :: Parser xo -> Parser (ConvOptions xo)
-convOptions xopts =
+convOptions :: Parser ConvOptions
+convOptions =
   ConvOptions
     <$> (   (   Left
             <$< option auto
@@ -420,7 +425,39 @@ convOptions xopts =
             <>  action "file"
             )
         )
-    <*> xopts
+    <*> (  switch
+        <| long "xmsg-typed"
+        <> help
+             (  "Treat external messages as a typed value instead of a raw "
+             <> "bytestring. This only makes a difference when reading or "
+             <> "writing in the Read/Show codec. The purpose is to make the "
+             <> "format more human-friendly to read."
+             )
+        <> showDefault
+        )
+
+data RTAction =
+    RTRunProc
+    -- ^ Run a process, the default action.
+  | RTConvProcData
+    -- ^ Convert process data between different formats.
+ deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
+
+rtActionOptions :: Parser RTAction
+rtActionOptions =
+  (  option auto
+    <| long "action"
+    <> metavar "ACTION"
+    <> help ("Runtime action, " <> enumAllShow @RTAction)
+    <> completeWith (show <$> enumAll @RTAction)
+    <> value RTRunProc
+    <> showDefault
+    )
+    <|> (  flag' RTConvProcData
+        <| long "convert"
+        <> help "Don't run a process, instead convert process data."
+        <> showDefault
+        )
 
 defaultDescription :: String -> String -> String
 defaultDescription synopsis syntax =

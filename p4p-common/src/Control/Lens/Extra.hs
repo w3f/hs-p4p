@@ -7,7 +7,7 @@
 
 module Control.Lens.Extra where
 
-import           Control.Lens               (ALens', Lens', Over,
+import           Control.Lens               (ALens', Lens', LensLike, Over,
                                              unsafeSingular, use, (.=), (.~))
 import           Control.Lens.At            (Index, IxValue)
 import           Control.Lens.Indexed       (FoldableWithIndex (..),
@@ -22,6 +22,11 @@ import           Data.Functor.Identity      (Identity (..))
 import           Data.Map.Bounded           as BM
 import           GHC.Stack                  (HasCallStack)
 
+
+-- https://github.com/ekmett/lens/issues/895
+matching' :: LensLike (Either a) s t a b -> s -> Either t a
+matching' k = either Right Left . k Left
+{-# INLINE matching' #-}
 
 -- | Slightly more powerful version of %%= that can run actions in the same
 -- MonadState. Any changes to the part targeted by the input lens are

@@ -215,7 +215,9 @@ oreqEnsure ldrg lsched loreq loreqId par mkMsg reqDst reqBody = runState $ do
                                  }
       loreqId . at reqId .= Just (reqDst Z.:!: reqBody)
       pure
-        ( [P.MsgLo (P.UData dstAddr request), kLog $ I_KProcessNew kproc]
+        ( [ P.MsgLo (P.UData dstAddr (P.Val request))
+          , kLog $ I_KProcessNew kproc
+          ]
         , Present oreqProc
         )
  where

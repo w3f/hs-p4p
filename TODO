@@ -22,6 +22,9 @@ Abstractions
 Technical debt
 ==============
 
+! LogAuxLoHiEnv, switch Lo/Hi around
+! pass logger into RTLoIO/RTHiIO
+- compress range of ticks when recording/replaying
 - update crypto interface
 
 

@@ -7,16 +7,12 @@ module P4P.RT.Node.UDP where
 
 -- external
 import qualified Data.ByteString           as BS
-import qualified Data.ByteString.Lazy      as LBS
 import qualified Data.Map.Strict           as M
 
-import           Codec.Serialise           (Serialise (..), deserialiseOrFail,
-                                            serialise)
 import           Control.Monad             (when)
 import           Data.Foldable             (toList, traverse_)
-import           P4P.Proc                  (Observation (..), ProcIface (..),
-                                            SockAddr, UMsg (..), UPMsgI, UPMsgO,
-                                            UProtocol (..))
+import           P4P.Proc                  (Observation (..), SockAddr,
+                                            UMsg (..), UProtocol (..))
 
 -- external, impure
 import           Control.Clock.IO          (Clock (..), IOClock)
@@ -32,10 +28,7 @@ import           P4P.RT.Network
 
 udpRTLoIO
   :: UProtocol ps
-  => Addr ps ~ SockAddr
-  => LoI ps ~ UPMsgI ps
-  => LoO ps ~ UPMsgO ps
-  => Serialise (Msg ps) => IOClock -> ps -> IO (RTLoIO ps, IO ())
+  => Addr ps ~ SockAddr => IOClock -> ps -> IO (RTLoIO ps, IO ())
 udpRTLoIO clock ps = do
   let ep = EndpointByAddr $ toNAddr $ head $ toList $ getAddrs ps
   (sock, addr') <- socketFromEndpoint ep (pure . head) Datagram defaultProtocol
@@ -50,20 +43,14 @@ udpRTLoIO clock ps = do
       i = tryTakeMVar myAddr >>= \case
         Nothing -> do
           (body, src) <- recvFrom sock 65536
-          case deserialiseOrFail $ LBS.fromStrict body of
-            Right msg -> do
-              pure $ Just $ UData (fromNAddr src) msg
-            Left e -> do
-              logErr $ "bad recv: " <> show e
-              i -- try again
+          pure $ Just $ UData (fromNAddr src) body
         Just addr -> do
           now <- clockNow clock
           let firstObs = M.singleton (fromNAddr addr) (ObsPositive now)
           pure $ Just $ UOwnAddr firstObs
 
       o = \case
-        UData dst msg -> do
-          let body = LBS.toStrict $ serialise msg
+        UData dst body -> do
           sent <- sendTo sock body (toNAddr dst)
           let want = BS.length body
           when (sent < want) $ do

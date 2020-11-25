@@ -14,3 +14,4 @@
 
 - modules:
   - {name: Control.Lens, badidents: [At, Ixed, at, ix, sans], message: "Use versions from our Control.Lens.Strict instead"}
+  - {name: Codec.Serialise, badidents: [deserialise, deserialiseOrFail], message: "Use deserialiseFullyOrFail instead"}

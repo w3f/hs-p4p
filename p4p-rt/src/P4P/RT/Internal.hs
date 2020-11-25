@@ -33,9 +33,10 @@ import           Data.Traversable               (for)
 import           Data.Void                      (Void)
 import           GHC.Generics                   (Generic)
 import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
-                                                 PMsgO, PMsgO', Proc,
-                                                 ProcIO (..), ProcIface (..),
-                                                 Tick, runReactProc)
+                                                 PMsgI', PMsgO, PMsgO_, PMsgO_',
+                                                 Proc, ProcIO (..),
+                                                 ProcIface (..), Tick,
+                                                 UProtocol (..), runReactProc)
 
 -- external, impure
 import qualified Control.Exception              as E
@@ -448,49 +449,82 @@ handleRTResult = \case
     hPutStrLn stderr $ "p4p runtime gave errors: " <> show err
     pure (ExitFailure 1)
 
+writeProcData
+  :: forall a
+   . (Serialise a, Show a)
+  => Handle
+  -> Bool
+  -> ((CodecFormat, a), SomeResidue a)
+  -> IO ()
+writeProcData ho p ((k, v), res) = do
+  let showLn' = if p then pShowLn else showLn
+  let (enc, i, o) = case k of
+        CodecCbor -> (LBS.pack . showLn', CodecCbor, CodecRead)
+        CodecRead -> (serialise, CodecRead, CodecCbor)
+  hPutStrLn stderr $ "input  format: " <> show i
+  hPutStrLn stderr $ "output format: " <> show o
+  withDecodeStream "convertProcData decode" (LBS.hPut ho . enc) v res
+
+convertProcErrors :: [String] -> [String] -> [String] -> IO ()
+convertProcErrors erri erro errs = do
+  let errors =
+        fmap ("imsg : " <>) erri
+          <> fmap ("omsg : " <>) erro
+          <> fmap ("state: " <>) errs
+  hPutStrLn stderr
+    $  "convertProcData: could not detect format, "
+    <> "perhaps try a different protocol and/or extension:\n"
+    <> intercalate "\n" errors
+
 convertProcData
-  :: forall ps xo
+  :: forall ps
    . ProcReRe Serialise ps
   => Serialise ps
   => ProcReRe Show ps
-  => Show ps => ProcReRe Read ps => Read ps => ConvOptions xo -> IO ()
+  => Show ps => ProcReRe Read ps => Read ps => ConvOptions -> IO ()
 convertProcData opt = do
   hi  <- mkHandle ReadMode convIFile
   ho  <- mkHandle WriteMode convOFile
   bs0 <- LBS.hGetContents hi
   unless (LBS.null bs0) $ do
     case someDecodeStream bs0 (allCodecs @(PMsgI ps)) of
-      Right result -> writeAll ho False result
-      Left  erri   -> case someDecodeStream bs0 (allCodecs @(PMsgO' ps)) of
-        Right result -> writeAll ho False result
+      Right result -> writeProcData ho False result
+      Left  erri   -> case someDecodeStream bs0 (allCodecs @(PMsgO_ ps)) of
+        Right result -> writeProcData ho False result
         Left  erro   -> case someDecodeStream bs0 (allCodecs @(RTCfg, ps)) of
-          Right result -> writeAll ho True result
-          Left  errs   -> do
-            let errors =
-                  fmap ("imsg : " <>) erri
-                    <> fmap ("omsg : " <>) erro
-                    <> fmap ("state: " <>) errs
-            hPutStrLn stderr
-              $  "convertProcData: could not detect format, "
-              <> "perhaps try a different protocol and/or extension:\n"
-              <> intercalate "\n" errors
- where
-  ConvOptions {..} = opt
+          Right result -> writeProcData ho True result
+          Left  errs   -> convertProcErrors erri erro errs
+  where ConvOptions {..} = opt
 
-  writeAll
-    :: (Serialise a, Show a)
-    => Handle
-    -> Bool
-    -> ((CodecFormat, a), SomeResidue a)
-    -> IO ()
-  writeAll ho p ((k, v), res) = do
-    let showLn' = if p then pShowLn else showLn
-    let (enc, i, o) = case k of
-          CodecCbor -> (LBS.pack . showLn', CodecCbor, CodecRead)
-          CodecRead -> (serialise, CodecRead, CodecCbor)
-    hPutStrLn stderr $ "input  format: " <> show i
-    hPutStrLn stderr $ "output format: " <> show o
-    withDecodeStream "convertProcData decode" (LBS.hPut ho . enc) v res
+type UProcReRe (codec :: Type -> Constraint) ps
+  = (codec (Addr ps), codec (XMsg ps))
+
+-- | Like 'convertProcData' but transparently encode/decode the 'XMsg' type.
+convertUProcData
+  :: forall ps
+   . Ord (Addr ps)
+  => ProcReRe Serialise ps
+  => UProcReRe Serialise ps
+  => Serialise ps
+  => ProcReRe Show ps
+  => UProcReRe Show ps
+  => Show ps
+  => ProcReRe Read ps
+  => UProcReRe Read ps
+  => Read ps => ConvOptions -> IO ()
+convertUProcData opt = do
+  hi  <- mkHandle ReadMode convIFile
+  ho  <- mkHandle WriteMode convOFile
+  bs0 <- LBS.hGetContents hi
+  unless (LBS.null bs0) $ do
+    case someDecodeStream bs0 (allCodecs @(PMsgI' ps)) of
+      Right result -> writeProcData ho False result
+      Left  erri   -> case someDecodeStream bs0 (allCodecs @(PMsgO_' ps)) of
+        Right result -> writeProcData ho False result
+        Left  erro   -> case someDecodeStream bs0 (allCodecs @(RTCfg, ps)) of
+          Right result -> writeProcData ho True result
+          Left  errs   -> convertProcErrors erri erro errs
+  where ConvOptions {..} = opt
 
 -- ** External interface out of the runtime
 

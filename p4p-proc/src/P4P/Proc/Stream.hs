@@ -33,16 +33,20 @@ temporary compromise solution.
 module P4P.Proc.Stream where
 
 -- external
+import qualified Data.Set          as S
+
 import           Codec.Serialise   (Serialise)
 import           Data.Binary       (Binary)
+import           Data.ByteString   (ByteString)
 import           Data.Kind         (Type)
 import           Data.Schedule     (HasNow)
+import           Data.Void         (Void)
 import           Data.Word
 import           GHC.Generics      (Generic)
 
 -- internal
-import           P4P.Proc.Internal (Direction (..))
-import           P4P.Proc.Protocol (Observations, SockAddr)
+import           P4P.Proc.Internal (GMsgI, GMsgO, ProcIface (..))
+import           P4P.Proc.Types
 
 
 {- | A stream id. This is a 56-bit integer, to fit into a QUIC stream id.
@@ -90,18 +94,22 @@ See 'SMsgI' and 'SMsgO' for more details.
 
 'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class HasNow ps => SProtocol ps where
+class (HasNow ps, LoI ps ~ SPMsgI ps, LoO ps ~ SPMsgO ps) => SProtocol ps where
+  {- | Entity address, used for sending and receiving messages.
+
+  Depending on the protocol, this may or may not uniquely identify the entity.
+  -}
   type Addr ps :: Type
   type Addr ps = SockAddr
   -- | A cryptographic id that uniquely identifies an entity.
   type Pid ps :: Type
   -- | Main protocol message type, for external communication between entities.
-  type Msg ps :: Type
+  type XMsg ps :: Type
 
   -- | Get the current receive addresses from the protocol state.
   --
   -- This is needed in order to support record-and-replay.
-  getAddrs :: ps -> [Addr ps]
+  getAddrs :: ps -> S.Set (Addr ps)
 
 -- | Local message that encodes incoming actions within 'SProtocol'.
 data SMsgI pid addr msg =
@@ -191,5 +199,17 @@ data SMsgO pid addr msg =
     -}
  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
-type SPMsgI ps = SMsgI (Pid ps) (Addr ps) (Msg ps)
-type SPMsgO ps = SMsgO (Pid ps) (Addr ps) (Msg ps)
+type SPMsgI ps = SMsgI (Pid ps) (Addr ps) ByteString
+type SPMsgO ps = SMsgO (Pid ps) (Addr ps) ByteString
+
+-- | Variant of 'SPMsgI' that preserves the external message type.
+type SPMsgI' ps = SMsgI (Pid ps) (Addr ps) (ExtVal (XMsg ps))
+-- | Variant of 'SPMsgO' that preserves the external message type.
+type SPMsgO' ps = SMsgO (Pid ps) (Addr ps) (ExtVal (XMsg ps))
+
+-- | Variant of 'PMsgI' that preserves the external message type.
+type PMsgI' ps = GMsgI (EnvI ps) (SPMsgI' ps) (HiI ps) Void
+-- | Variant of 'PMsgO' that preserves the external message type.
+type PMsgO' ps = GMsgO (EnvO ps) (SPMsgO' ps) (HiO ps) (AuxO ps)
+-- | Variant of 'PMsgO_' that preserves the external message type.
+type PMsgO_' ps = GMsgO (EnvO ps) (SPMsgO' ps) (HiO ps) Void

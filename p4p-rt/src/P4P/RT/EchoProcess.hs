@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric        #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE LambdaCase           #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -12,7 +13,7 @@ import           Codec.Serialise (Serialise (..))
 import           Data.Binary     (Binary (..))
 import           Data.Schedule   (HasNow (..))
 import           GHC.Generics    (Generic)
-import           P4P.Proc
+import           P4P.Proc        hiding (Direction)
 import           Text.Read       (readEither)
 
 -- internal
@@ -35,7 +36,7 @@ instance HasNow EchoState where
   getNow = count
 
 instance UProtocol EchoState where
-  type Msg EchoState = EchoMsg
+  type XMsg EchoState = EchoMsg
   getAddrs = obsPositiveToSet . addrs
 
 instance ProcIface EchoState where
@@ -43,13 +44,15 @@ instance ProcIface EchoState where
   type LoO EchoState = UPMsgO EchoState
   type HiI EchoState = (SockAddr, EchoMsg)
   type HiO EchoState = (SockAddr, EchoMsg)
+  type AuxO EchoState = ProtocolCodecError
 
 instance Proc EchoState where
-  react i s = case i of
-    MsgEnv t                           -> ([], s { count = t })
-    MsgHi  (dst, msg)                  -> ([MsgLo (UData dst msg)], s) -- pass it on
-    MsgLo  (UData src msg@(dir, body)) -> case dir of
-      Rwd -> ([MsgLo (UData src (Fwd, body))], s) -- echo reply back
+  react = withCodec cborCodec16 id $ \i s -> case i of
+    MsgEnv t          -> ([], s { count = t })
+    MsgHi  (dst, msg) -> ([MsgLo (UData dst (Val msg))], s) -- pass it on
+    MsgLo (UData src (Mal _)) -> ([], s) -- ignore malformed messages
+    MsgLo (UData src (Val msg@(dir, body))) -> case dir of
+      Rwd -> ([MsgLo (UData src (Val (Fwd, body)))], s) -- echo reply back
       Fwd -> ([MsgHi (src, msg)], s) -- forward it to the user
     MsgLo (UOwnAddr obs) -> if null obs
       then ([MsgLo (UOwnAddr (addrs s))], s)

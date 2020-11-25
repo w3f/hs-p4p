@@ -1,80 +1,29 @@
-{-# LANGUAGE DataKinds         #-}
-{-# LANGUAGE DeriveAnyClass    #-}
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE EmptyDataDeriving #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE RankNTypes        #-}
-{-# LANGUAGE TupleSections     #-}
-{-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeFamilies        #-}
 
 module P4P.Proc.Protocol where
 
 -- external
-import qualified Data.Map.Strict   as M
-import qualified Data.Set          as S
+import qualified Data.Set                         as S
 
-import           Codec.Serialise   (Serialise)
-import           Data.Binary       (Binary)
-import           Data.ByteString   (ByteString)
-import           Data.Function     (on)
-import           Data.Kind         (Type)
-import           Data.Map.Strict   (Map)
-import           Data.Schedule     (HasNow, Tick)
-import           Data.Word
-import           GHC.Generics      (Generic)
+import           Control.Lens                     (Prism, review)
+import           Control.Lens.Extra               (matching')
+import           Control.Monad.Trans.State.Strict (runState, state)
+import           Data.ByteString                  (ByteString)
+import           Data.Kind                        (Type)
+import           Data.Schedule                    (HasNow)
+import           Data.Void                        (Void)
 
 -- internal
 import           P4P.Proc.Internal
+import           P4P.Proc.Types
 
-
-type PortNumber = Word16
-type HostAddress = Word32
-type HostAddress6 = (Word32, Word32, Word32, Word32)
-type FlowInfo = Word32
-type ScopeID = Word32
-
-{- | Default type of address.
-
-Same as t'Network.Socket.SockAddr' but fully-strict with sane instances.
--}
-data SockAddr =
-    SockAddrInet !PortNumber !HostAddress
-  | SockAddrInet6 !PortNumber !FlowInfo !HostAddress6 !ScopeID
-  | SockAddrUnix !ByteString
-  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
-
-data Observation t = ObsPositive !t | ObsNegative !t
- deriving (Eq, Show, Read, Generic, Binary, Serialise)
-
-obsToPair :: Observation t -> (t, Bool)
-obsToPair = \case
-  ObsPositive t -> (t, True)
-  ObsNegative t -> (t, False)
-
-instance Ord t => Ord (Observation t) where
-  compare = compare `on` obsToPair
-
-obsIsPositive :: Observation a -> Bool
-obsIsPositive = \case
-  ObsPositive _ -> True
-  ObsNegative _ -> False
-
-obsIsNegative :: Observation a -> Bool
-obsIsNegative = \case
-  ObsPositive _ -> False
-  ObsNegative _ -> True
-
-type Observations a = Map a (Observation Tick)
-
-obsPositiveFromList :: Ord a => Tick -> [a] -> Observations a
-obsPositiveFromList tick addrs = M.fromList $ (, ObsPositive tick) <$> addrs
-
-obsPositiveToSet :: Observations a -> S.Set a
-obsPositiveToSet = M.keysSet . M.filter obsIsPositive
-
-updateTrustedObs :: Ord a => Observations a -> Observations a -> Observations a
-updateTrustedObs = M.unionWith max
 
 {- | Protocol sending unordered unreliable datagrams, the simplest protocol.
 
@@ -91,7 +40,7 @@ See 'UMsg' for more details.
 
 'HasNow' is a superclass, in order to support record-and-replay.
 -}
-class HasNow ps => UProtocol ps where
+class (HasNow ps, LoI ps ~ UPMsgI ps, LoO ps ~ UPMsgO ps) => UProtocol ps where
   {- | Entity address, used for sending and receiving messages.
 
   Depending on the protocol, this may or may not uniquely identify the entity.
@@ -99,47 +48,73 @@ class HasNow ps => UProtocol ps where
   type Addr ps :: Type
   type Addr ps = SockAddr
   -- | Main protocol message type, for external communication between entities.
-  type Msg ps :: Type
+  type XMsg ps :: Type
 
   -- | Get the current receive addresses from the protocol state.
   --
   -- This is needed in order to support record-and-replay.
   getAddrs :: ps -> S.Set (Addr ps)
 
--- | Local message that encodes actions within 'UProtocol'.
---
--- For simplicity, we reuse this in both directions.
-data UMsg (dir :: Direction) addr msg
-  = UData !addr !msg
-    {- ^ Communicate with another entity.
-
-    For 'Incoming' direction, we are receiving the message, and the address is
-    the source of the message.
-
-    For 'Outgoing' direction, we are sending the message, and the address is
-    the destination of the message.
-    -}
-  | UOwnAddr !(Observations addr)
-    {- ^ Observations about the receive-address(es) of a process.
-
-    For 'Incoming' direction, the other component is telling us about addresses
-    they observed. For example if they failed to bind to an address, we would
-    get a negative observation for that address. If the whole observation is
-    'Data.Foldable.null', we should take this as an implicit request to send
-    them our view of what our addresses should be.
-
-    For 'Outgoing' direction, we are telling the other component what our
-    addresses should be. This may or may not actually succeed; if this matters
-    to us  then we should watch for replies back from the other component and
-    take action if we don't get a timely confirmation.
-    -}
- deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+-- | Type alias for the address of a process.
+type ProcAddr p = Addr (State p)
 
 type UMsgI addr msg = UMsg 'Incoming addr msg
 type UMsgO addr msg = UMsg 'Outgoing addr msg
 
-type UPMsgI ps = UMsgI (Addr ps) (Msg ps)
-type UPMsgO ps = UMsgO (Addr ps) (Msg ps)
+type UPMsgI ps = UMsgI (Addr ps) ByteString
+type UPMsgO ps = UMsgO (Addr ps) ByteString
 
--- | Type alias for the address of a process.
-type ProcAddr p = Addr (State p)
+-- | Variant of 'UPMsgI' that preserves the external message type.
+type UPMsgI' ps = UMsgI (Addr ps) (ExtVal (XMsg ps))
+-- | Variant of 'UPMsgO' that preserves the external message type.
+type UPMsgO' ps = UMsgO (Addr ps) (ExtVal (XMsg ps))
+
+-- | Variant of 'PMsgI' that preserves the external message type.
+type PMsgI' ps = GMsgI (EnvI ps) (UPMsgI' ps) (HiI ps) Void
+-- | Variant of 'PMsgO' that preserves the external message type.
+type PMsgO' ps = GMsgO (EnvO ps) (UPMsgO' ps) (HiO ps) (AuxO ps)
+-- | Variant of 'PMsgO_' that preserves the external message type.
+type PMsgO_' ps = GMsgO (EnvO ps) (UPMsgO' ps) (HiO ps) Void
+
+withCodecF
+  :: forall ps f
+   . UProtocol ps
+  => Functor f
+  => Codec (XMsg ps)
+  -> (ProtocolCodecError -> AuxO ps)
+  -> (PMsgI' ps -> f [PMsgO' ps])
+  -> (PMsgI ps -> f [PMsgO ps])
+withCodecF codec mkLog rx i = case prs `matching'` i of
+  Left  i'        -> (>>= encOut) <$> rx i'
+  Right (src, bs) -> case codecDec bs of
+    Left (Left err) -> fmap (mkLog' (DecodeMalformed err) :) $ do
+      (>>= encOut) <$> rx (review prs (src, Mal bs))
+    Left (Right l) -> fmap (mkLog' (DecodeLeftovers l) :) $ do
+      (>>= encOut) <$> rx (review prs (src, Mal bs))
+    Right v -> (>>= encOut) <$> rx (review prs (src, Val v))
+ where
+  Codec {..} = codec
+  prs
+    :: Prism
+         (GMsg dir e (UMsg dir addr msg0) h a)
+         (GMsg dir e (UMsg dir addr msg1) h a)
+         (addr, msg0)
+         (addr, msg1)
+  prs    = _MsgLo . _UData
+  mkLog' = MsgAux . mkLog
+  encOut :: PMsgO' ps -> [PMsgO ps]
+  encOut o = case prs `matching'` o of
+    Left  o'           -> pure o'
+    Right (dst, Val v) -> case codecEnc v of
+      Left  l  -> [mkLog' (EncodeTooBig l)]
+      Right bs -> [review prs (dst, bs)]
+    Right (dst, Mal _) -> [mkLog' EncodeMalformed]
+
+withCodec
+  :: forall ps
+   . UProtocol ps
+  => Codec (XMsg ps)
+  -> (ProtocolCodecError -> AuxO ps)
+  -> (PMsgI' ps -> ps -> ([PMsgO' ps], ps))
+  -> (PMsgI ps -> ps -> ([PMsgO ps], ps))
+withCodec codec mkLog rx = runState . withCodecF @ps codec mkLog (state . rx)

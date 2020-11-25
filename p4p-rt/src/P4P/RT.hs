@@ -26,6 +26,7 @@ already possible to it manually). See the TODO for details.
 -}
 module P4P.RT
   ( module P4P.RT.Options
+  , module Options.Applicative
   , RTError(..)
   , RTHiIO
   , RTLoIO
@@ -34,6 +35,7 @@ module P4P.RT
   , defaultRTLogging
   , handleRTResult
   , convertProcData
+  , convertUProcData
   , XTHiM
   , XTHiIO
   , RTAsync(..)
@@ -50,6 +52,8 @@ module P4P.RT
   , initializeTickAddrs
   )
 where
+
+import           Options.Applicative
 
 import           P4P.RT.Client
 import           P4P.RT.Internal

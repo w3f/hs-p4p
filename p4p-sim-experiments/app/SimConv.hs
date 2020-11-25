@@ -4,7 +4,6 @@
 {-# LANGUAGE GADTs                #-}
 {-# LANGUAGE PolyKinds            #-}
 {-# LANGUAGE RankNTypes           #-}
-{-# LANGUAGE RecordWildCards      #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeApplications     #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -32,24 +31,18 @@ type SimXC' xs = (SimXRe Serialise xs, SimXRe Show xs, SimXRe Read xs)
 class SimXC' xs => SimXC xs
 instance SimXC' xs => SimXC xs
 
-runMain :: ConvOptions (SimProto, SimExt) -> IO ExitCode
+runMain :: (SimProto, SimExt, ConvOptions) -> IO ExitCode
 runMain opt = withSimProto @SimPC proto $ \(p :: SProt ps) -> do
   withSimExt @SimXC ext $ \(x :: SExt xs) -> do
-    convertProcData @(SimFullState ps xs) opt
+    convertProcData @(SimFullState ps xs) convOpt
     pure ExitSuccess
- where
-  ConvOptions {..} = opt
-  (proto, ext)     = convXOpts
+  where (proto, ext, convOpt) = opt
 
-simConvParseOptions :: Parser xo -> [String] -> IO (ConvOptions xo)
-simConvParseOptions xopts = parseArgsIO'
+simConvParseOptions :: [String] -> IO (SimProto, SimExt, ConvOptions)
+simConvParseOptions = parseArgsIO'
   "sim-conv - a converter for p4p-sim data structures"
   "Read and write p4p-sim {input, output, state} in various formats."
-  (convOptions xopts)
+  (liftA3 (,,) protoOptions extOptions convOptions)
 
 main :: IO ()
-main =
-  getArgs
-    >>= simConvParseOptions (liftA2 (,) protoOptions extOptions)
-    >>= runMain
-    >>= exitWith
+main = getArgs >>= simConvParseOptions >>= runMain >>= exitWith

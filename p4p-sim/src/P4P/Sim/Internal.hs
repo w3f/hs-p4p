@@ -45,9 +45,8 @@ import           Data.Traversable                 (for)
 import           P4P.Proc                         (GMsg (..), ProcAddr,
                                                    ProcIO (..), ProcIface (..),
                                                    ProcMsgI, Process (..),
-                                                   UMsg (..), UPMsgI, UPMsgO,
-                                                   UProtocol, liftProcIO,
-                                                   obsIsPositive,
+                                                   UMsg (..), UProtocol,
+                                                   liftProcIO, obsIsPositive,
                                                    runReactProcess')
 import           Safe                             (headNote)
 
@@ -102,13 +101,7 @@ type SimT p = StateT (SimRunState p)
 type SimWT p m a = WriterT [SimO (State p)] (SimT p m) a
 
 type SimProcess p
-  = ( Ord (ProcAddr p)
-    , Process p
-    , EnvI (State p) ~ Tick
-    , UProtocol (State p)
-    , LoI (State p) ~ UPMsgI (State p)
-    , LoO (State p) ~ UPMsgO (State p)
-    )
+  = (Ord (ProcAddr p), Process p, EnvI (State p) ~ Tick, UProtocol (State p))
 
 insProc
   :: forall p m

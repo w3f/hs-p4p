@@ -1,8 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DefaultSignatures   #-}
-{-# LANGUAGE DeriveAnyClass      #-}
-{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
@@ -18,20 +16,17 @@
 module P4P.Proc.Internal where
 
 -- external
-import           Codec.Serialise                  (Serialise)
 import           Control.Monad                    (join)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State.Strict (execStateT, state)
 import           Control.Op
-import           Data.Binary                      (Binary)
 import           Data.Kind                        (Constraint, Type)
 import           Data.Schedule                    (Tick)
 import           Data.Void                        (Void)
-import           GHC.Generics                     (Generic)
 
+-- internal
+import           P4P.Proc.Types
 
-data Direction = Incoming | Outgoing
- deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
 
 {- | Message interface of a 'Process'.
 
@@ -118,23 +113,15 @@ instance ProcIface () where
   type HiI () = Void
   type HiO () = Void
 
-{- | General message to/from a process. -}
-data GMsg (dir :: Direction) e l h a
-  = MsgEnv !e
-  -- ^ Message from/to the environment.
-  | MsgLo !l
-  -- ^ Message from/to the lower layer.
-  | MsgHi !h
-  -- ^ Message from/to the higher layer.
-  | MsgAux !a
- deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
-
 type GMsgI e l h a = GMsg 'Incoming e l h a
 type GMsgO e l h a = GMsg 'Outgoing e l h a
 
+-- | Process incoming message type.
 type PMsgI ps = GMsgI (EnvI ps) (LoI ps) (HiI ps) Void
+-- | Process outgoing message type.
 type PMsgO ps = GMsgO (EnvO ps) (LoO ps) (HiO ps) (AuxO ps)
-type PMsgO' ps = GMsgO (EnvO ps) (LoO ps) (HiO ps) Void
+-- | Process outgoing message type, ignoring auxilliary output.
+type PMsgO_ ps = GMsgO (EnvO ps) (LoO ps) (HiO ps) Void
 
 {- | Pure communicating process.
 

@@ -15,7 +15,8 @@ import qualified Text.ParserCombinators.ReadP    as Read
 import qualified Text.ParserCombinators.ReadPrec as Read
 
 import           Codec.Serialise                 (Serialise (..),
-                                                  deserialiseOrFail, serialise)
+                                                  deserialiseFullyOrFail,
+                                                  serialise)
 import           Control.Monad.Primitive         (PrimMonad (..))
 import           Data.Bifunctor                  (Bifunctor (..))
 import           Data.Binary                     (Binary)
@@ -46,12 +47,12 @@ withStreamOrEOF
   -> Stream s
   -> (s -> Either String (s, a))
   -> IO (Maybe a)
-withStreamOrEOF ctx (Stream mv) deserialise = do
+withStreamOrEOF ctx (Stream mv) deser = do
   bs0 <- readMutVar mv
   if bs0 == mempty
     then pure Nothing
     else do
-      let (unused, v) = case deserialise bs0 of
+      let (unused, v) = case deser bs0 of
             Left  err -> error $ ctx <> ": " <> err
             Right a   -> a
       writeMutVar mv unused
@@ -80,7 +81,7 @@ deserialiseOrEOF
 deserialiseOrEOF ctx s = withStreamOrEOF ctx s deserialiseContinue
 
 deserialiseNote :: (HasCallStack, Serialise a) => String -> LBS.ByteString -> a
-deserialiseNote ctx bs = case deserialiseOrFail bs of
+deserialiseNote ctx bs = case deserialiseFullyOrFail bs of
   Left  err -> error $ ctx <> ": " <> show err
   Right a   -> a
 

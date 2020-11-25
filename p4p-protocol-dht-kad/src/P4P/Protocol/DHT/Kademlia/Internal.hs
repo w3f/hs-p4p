@@ -14,6 +14,7 @@ TODO: lens for Sequence.Extra shit, lens for bounded containers...
 {-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TupleSections         #-}
+{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE UndecidableInstances  #-}
 
@@ -56,7 +57,6 @@ import qualified Data.Sequence.Extra               as S
 import qualified Data.Set                          as Set
 import qualified Data.Strict                       as Z
 import qualified P4P.Proc                          as P
-import qualified P4P.Proc.Lens                     as P
 
 import           Control.Lens                      (Lens', use, (%%=), (%%~),
                                                     (%=), (.=), (^?))
@@ -355,9 +355,10 @@ kBucketMaint input oreqProc' = case input of
       Ping -> insertNodeIdTOReqPing realNow dst
       _    -> doNothing
     _ -> doNothing
-  P.MsgHi _                          -> doNothing
-  P.MsgLo (P.UOwnAddr _            ) -> doNothing
-  P.MsgLo (P.UData srcAddr Msg {..}) -> case body of
+  P.MsgHi _ -> doNothing
+  P.MsgLo (P.UOwnAddr _) -> doNothing
+  P.MsgLo (P.UData srcAddr (P.Mal _)) -> doNothing
+  P.MsgLo (P.UData srcAddr (P.Val Msg {..})) -> case body of
     Left Request{} -> do
       insertNodeId Nothing False src srcAddr
     Right Reply {..} -> case oreqProc' of
@@ -767,8 +768,9 @@ kHandleInput input oreqProc' s0 = flip runStateWT s0 $ case input of
       statewT $ icmdOReqCancel_' cmdId reqDst reqBody
       stateWT $ icmdOReqResult cmdId reqDst reqBody (F.TimedOut ())
     TOICmd cmdId -> statewT $ icmdDelete' cmdId parTOICmd
-  P.MsgHi cmd                   -> stateWT $ icmdStart cmd True
-  P.MsgLo (P.UData srcAddr msg) -> case body msg of
+  P.MsgHi cmd                           -> stateWT $ icmdStart cmd True
+  P.MsgLo (P.UData srcAddr (P.Mal _  )) -> pure ()  -- TODO: respond to malicious peer
+  P.MsgLo (P.UData srcAddr (P.Val msg)) -> case body msg of
     Left Request {..} -> do
       statewT $ ireqEnsure' srcAddr msg $ \s -> case reqBody of
         Ping         -> (Pong, s)
@@ -814,10 +816,10 @@ kInput :: (R.DRG' g, Monad m) => KadI -> State g -> m ([KadO], State g)
 kInput input s0 = flip runStateWT s0 $ do
   -- prelim processing for child functions
   let (oreqProc', maybePing, maybeDst) = case input of
-        P.MsgLo (P.UData srcAddr recvMsg@Msg {..}) -> case body of
+        P.MsgLo (P.UData srcAddr (P.Val recvMsg@Msg {..})) -> case body of
           Right Reply {..} ->
             ( kSentReqId ^? ix repReqId >>= \k -> kSentReq ^? ix (Z.toLazy k)
-            , P.MsgLo . P.UData srcAddr <$> pingReplyToRequest recvMsg
+            , P.MsgLo . P.UData srcAddr . P.Val <$> pingReplyToRequest recvMsg
             , Just (dst, recvMsg)
             )
           _ -> (Nothing, Nothing, Just (dst, recvMsg))
@@ -840,7 +842,7 @@ instance SC.HasNow (State g) where
 
 instance P.UProtocol (State g) where
   type Addr (State g) = NodeAddr
-  type Msg (State g) = Msg
+  type XMsg (State g) = Msg
   getAddrs = P.obsPositiveToSet . ownNodeAddrsObs
 
 instance P.ProcIface (State g) where
@@ -851,4 +853,5 @@ instance P.ProcIface (State g) where
   type AuxO (State g) = KLogMsg
 
 instance R.DRG' g => P.Proc (State g) where
-  react i s = runIdentity (runStateWT (kInput' i) s)
+  react = P.withCodec @(State g) P.cborCodec16 W_ProtocolDecodeError
+    $ \i s -> runIdentity (runStateWT (kInput' i) s)
