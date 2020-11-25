@@ -54,14 +54,14 @@ data SimLogging =
     LogNone
     -- ^ Log nothing
   | LogAux
-    -- ^ Log aux messages, from both the simulation framework and its processes.
-  | LogAuxProc
-    -- ^ Also log messages between processes.
-  | LogAuxProcHi
+    -- ^ Log aux messages, from the simulation framework, its processes, and the proc runtime.
+  | LogAuxHi
     -- ^ Also log user messages.
-  | LogAuxProcHiEnvO
+  | LogAuxHiProc
+    -- ^ Also log messages between processes.
+  | LogAuxHiProcEnvO
     -- ^ Also log EnvO, i.e. output timing signals.
-  | LogAuxProcHiEnvIO
+  | LogAuxHiProcEnvIO
     -- ^ Log everything including input ticks - warning very spammy!
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 makeLenses_ ''SimLogging

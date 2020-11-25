@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -15,6 +16,8 @@ module P4P.RT.Internal where
 
 -- external, pure
 import qualified Data.ByteString.Lazy.Char8     as LBS
+import qualified Data.Text                      as T
+import qualified Data.Text.Extra                as T
 
 import           Codec.Serialise                (Serialise (..), serialise)
 import           Control.Clock                  (Clocked (..))
@@ -29,6 +32,7 @@ import           Data.List                      (intercalate)
 import           Data.List.NonEmpty             (NonEmpty, fromList)
 import           Data.Maybe                     (isNothing, mapMaybe)
 import           Data.Schedule                  (HasNow (..))
+import           Data.Text                      (Text)
 import           Data.Traversable               (for)
 import           Data.Void                      (Void)
 import           GHC.Generics                   (Generic)
@@ -40,6 +44,7 @@ import           P4P.Proc                       (GMsg (..), GMsgI, GMsgO, PMsgI,
 
 -- external, impure
 import qualified Control.Exception              as E
+import qualified Data.Text.IO                   as TIO
 
 import           Control.Clock.IO               (Clock (..), IOClock, Intv (..),
                                                  clockWithIOs, interval,
@@ -58,9 +63,8 @@ import           Foreign.C.Types                (CInt)
 import           GHC.IO.Handle.FD               (fdToHandle)
 import           System.Directory               (doesPathExist)
 import           System.Exit                    (ExitCode (..))
-import           System.IO                      (BufferMode (..), Handle,
-                                                 IOMode (..), hClose, hIsEOF,
-                                                 hPutStrLn, hSetBuffering,
+import           System.IO                      (Handle, IOMode (..), hClose,
+                                                 hIsEOF, hPutStrLn,
                                                  openBinaryFile, stderr)
 import           System.IO.Error                (annotateIOError, catchIOError)
 import           UnliftIO.Exception             (bracket, finally, throwIO)
@@ -78,12 +82,9 @@ onExceptionShow tag io = E.catch
   )
 
 mkHandle :: IOMode -> Either CInt FilePath -> IO Handle
-mkHandle mode fdOrFile = do
-  h <- case fdOrFile of
-    Right path -> openBinaryFile path mode
-    Left  fd   -> fdToHandle fd
-  hSetBuffering h LineBuffering
-  pure h
+mkHandle mode fdOrFile = case fdOrFile of
+  Right path -> openBinaryFile path mode
+  Left  fd   -> fdToHandle fd
 
 rethrow :: (IOError -> IOError) -> IO a -> IO a
 rethrow f act = catchIOError act $ throwIO . f
@@ -162,19 +163,24 @@ data RTEnv ps m = RTEnv
   , rtProcIO :: !(ProcIO ps m)
   }
 
+data LogEvt i o  = LogProcI !i | LogProcO !o | LogLoAux !Text | LogHiAux !Text
+  deriving (Eq, Ord, Show, Read, Generic, Binary, Serialise)
+
 defaultLog
   :: (Show i, Show o)
-  => (Either i o -> Bool)
+  => (LogEvt i o -> Bool)
   -> String
   -> Handle
   -> Tick
-  -> Either i o
+  -> LogEvt i o
   -> IO ()
 defaultLog f tFmt h t evt = when (f evt) $ do
   tstr <- formatTime defaultTimeLocale tFmt <$< getZonedTime
-  hPutStrLn h $ tstr <> " | " <> show t <> " | " <> case evt of
-    Left  i -> "<- " <> show i
-    Right o -> "-> " <> show o
+  TIO.hPutStrLn h $ T.pack tstr <> " | " <> T.show t <> " | " <> case evt of
+    LogProcI i   -> "<- " <> T.show i
+    LogProcO o   -> "-> " <> T.show o
+    LogLoAux msg -> "LO " <> msg
+    LogHiAux msg -> "HI " <> msg
 
 -- | A type for the runtime to receive input and send output, to a client.
 type RTHiIO ps = (IO (Maybe (HiI ps)), [HiO ps] -> IO ())
@@ -247,15 +253,29 @@ defaultRT
   => RTOptions log
   -> RTCfg
   -> ps
-  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
-  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
-  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
+  -> Maybe (LogEvt (PMsgI ps) (PMsgO ps) -> Bool)
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTLoIO ps, IO ())
+     )
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTHiIO ps, IO ())
+     )
   -> ProcIAction Handle
   -> ProcOAction Handle
   -> IO (RTEnv ps IO)
 defaultRT opt cfg initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
   let initTick = getNow initState
       intv     = rtMsTickInterval $ rtMsTick cfg
+
+  rtLog1 <- case logFilter' of
+    Nothing -> pure (\_ _ -> pure ())
+    Just logFilter ->
+      mkHandle AppendMode rtLogOutput
+        >$> defaultLog @(PMsgI ps) @(PMsgO ps) logFilter rtLogTimeFmt
 
   (rtClock, rtLoIO, closeLo, rtHiIO, closeHi) <-
     if defaultRTWouldInteract opt
@@ -270,8 +290,10 @@ defaultRT opt cfg initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
             -- if the process is already ahead of the system then don't use it
             if sysNow >= initTick then pure sysClock else newClock initTick intv
           else newClock initTick intv
-        (rtLoIO, closeLo) <- mkLoIO rtClock initState
-        (rtHiIO, closeHi) <- mkHiIO rtClock initState
+        let logLo msg = clockNow rtClock >>= flip rtLog1 (LogLoAux msg)
+            logHi msg = clockNow rtClock >>= flip rtLog1 (LogHiAux msg)
+        (rtLoIO, closeLo) <- mkLoIO rtClock logLo initState
+        (rtHiIO, closeHi) <- mkHiIO rtClock logHi initState
         pure (rtClock, rtLoIO, closeLo, rtHiIO, closeHi)
     else
       pure
@@ -281,12 +303,6 @@ defaultRT opt cfg initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
         , error "programmer error, failed to define rtHiIO"
         , pure ()
         )
-
-  rtLog1 <- case logFilter' of
-    Nothing -> pure (\_ _ -> pure ())
-    Just logFilter ->
-      mkHandle AppendMode rtLogOutput
-        >$> defaultLog @(PMsgI ps) @(PMsgO ps) logFilter rtLogTimeFmt
 
   let (rtLoI, rtLoO) = rtLoIO
       (rtHiI, rtHiO) = rtHiIO
@@ -315,8 +331,8 @@ defaultRT opt cfg initState logFilter' mkLoIO mkHiIO procIMsg procOMsg = do
       x  -> Left (fromList (reverse x))
 
     rtLog t = \case
-      Left  i    -> rtLog1 t (Left i)
-      Right outs -> traverse_ (rtLog1 t . Right) outs
+      Left  i    -> rtLog1 t (LogProcI i)
+      Right outs -> traverse_ (rtLog1 t . LogProcO) outs
 
     rtRunI = do
       i <- rtI
@@ -372,9 +388,17 @@ runProcIO
   -> RTInitOptions init
   -> RTOptions log
   -> IO ps
-  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
-  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
-  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
+  -> Maybe (LogEvt (PMsgI ps) (PMsgO ps) -> Bool)
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTLoIO ps, IO ())
+     )
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTHiIO ps, IO ())
+     )
   -> IO (Either (NonEmpty RTError) ())
 runProcIO runReact initOpts opt mkNewState logFilter mkLoIO mkHiIO =
   bracket (openIOAction rtProcIOAction) closeIOAction $ \ProcIOAction {..} -> do
@@ -419,28 +443,38 @@ runProcIO'
   => RTInitOptions init
   -> RTOptions log
   -> IO ps
-  -> Maybe (Either (PMsgI ps) (PMsgO ps) -> Bool)
-  -> (IOClock -> ps -> IO (RTLoIO ps, IO ()))
-  -> (IOClock -> ps -> IO (RTHiIO ps, IO ()))
+  -> Maybe (LogEvt (PMsgI ps) (PMsgO ps) -> Bool)
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTLoIO ps, IO ())
+     )
+  -> (  IOClock
+     -> (Text -> IO ())
+     -> ps
+     -> IO (RTHiIO ps, IO ())
+     )
   -> IO (Either (NonEmpty RTError) ())
 runProcIO' = runProcIO runReactProc
 
 defaultRTLogging
   :: RTOptions RTLogging
-  -> Maybe (Either (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> Bool)
+  -> Maybe (LogEvt (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> Bool)
 defaultRTLogging opt = case rtLogging opt of
   LogNone -> Nothing
-  lv      -> Just (\msg -> fromEnum lv >= msgLv msg)
+  lv      -> Just (\msg -> fromEnum lv >= fromEnum (msgLv msg))
  where
-  msgLv :: Either (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> Int
+  msgLv :: LogEvt (GMsgI ei li hi Void) (GMsgO eo lo ho ao) -> RTLogging
   msgLv = \case
-    Left  (MsgEnv _) -> 5
-    Right (MsgEnv _) -> 4
-    Left  (MsgHi  _) -> 3
-    Right (MsgHi  _) -> 3
-    Left  (MsgLo  _) -> 2
-    Right (MsgLo  _) -> 2
-    Right (MsgAux _) -> 1
+    LogProcI (MsgEnv _) -> LogAuxHiLoEnvIO
+    LogProcO (MsgEnv _) -> LogAuxHiLoEnvO
+    LogProcI (MsgLo  _) -> LogAuxHiLo
+    LogProcO (MsgLo  _) -> LogAuxHiLo
+    LogProcI (MsgHi  _) -> LogAuxHi
+    LogProcO (MsgHi  _) -> LogAuxHi
+    LogProcO (MsgAux _) -> LogAux
+    LogLoAux _          -> LogAux
+    LogHiAux _          -> LogAux
 
 handleRTResult :: Either (NonEmpty RTError) () -> IO ExitCode
 handleRTResult = \case

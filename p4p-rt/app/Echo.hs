@@ -17,7 +17,7 @@ runEcho (act, convOpt, (initOpt, opt)) = case act of
     let mkState = uncurry (flip EchoState) <$> initializeTickAddrs initOpt id
         logging = defaultRTLogging opt
         mkLoIO  = udpRTLoIO @EchoState
-        mkHiIO _ _ = do
+        mkHiIO _ _ _ = do
           (stdio, close) <- do
             optionTerminalStdIO opt "p4p" ".echo_history" "p4p-echo> "
           pure (defaultRTHiIO @EchoState readEchoHiI showEchoHiO stdio, close)

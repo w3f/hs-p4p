@@ -261,14 +261,14 @@ data RTLogging =
     LogNone
     -- ^ Log nothing.
   | LogAux
-    -- ^ Log AuxO, i.e. protocol logging messages.
-  | LogAuxLo
-    -- ^ Also log LoI, LoO, i.e. protocol network traffic.
-  | LogAuxLoHi
+    -- ^ Log AuxO, i.e. protocol logging messages, as well as messages from the proc runtime.
+  | LogAuxHi
     -- ^ Also log HiI, HiO, i.e. user IO.
-  | LogAuxLoHiEnvO
+  | LogAuxHiLo
+    -- ^ Also log LoI, LoO, i.e. protocol network traffic.
+  | LogAuxHiLoEnvO
     -- ^ Also log EnvO, i.e. output timing signals.
-  | LogAuxLoHiEnvIO
+  | LogAuxHiLoEnvIO
     -- ^ Log everything including input ticks - warning very spammy!
  deriving (Eq, Ord, Show, Read, Generic, Bounded, Enum)
 

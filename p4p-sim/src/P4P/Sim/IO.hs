@@ -96,8 +96,8 @@ grunSimIO runReact opt mkXState mkPState mkSimUserIO =
     simRTOptions
     mkNewState
     logFilter
-    (\_ _ -> pure ((Just <$> voidInput, traverse_ absurd), pure ()))
-    (\_ _ -> mkSimUserIO)
+    (\_ _ _ -> pure ((Just <$> voidInput, traverse_ absurd), pure ()))
+    (\_ _ _ -> mkSimUserIO)
  where
   SimOptions {..}     = opt
   SimInitOptions {..} = rtInitOpts simRTInitOptions
@@ -113,26 +113,28 @@ grunSimIO runReact opt mkXState mkPState mkSimUserIO =
 
   logFilter = case rtLogging simRTOptions of
     LogNone -> Nothing
-    lv      -> Just (\msg -> fromEnum lv >= msgLv msg)
+    lv      -> Just (\msg -> fromEnum lv >= fromEnum (msgLv msg))
 
-  msgLv :: Either (SimXI ps xs) (SimXO ps xs) -> Int
+  msgLv :: LogEvt (SimXI ps xs) (SimXO ps xs) -> SimLogging
   msgLv = \case
-    Left  (MsgEnv _                         ) -> 5
-    Right (MsgAux (SimProcRecv _ (MsgEnv _))) -> 5
+    LogProcI (MsgEnv _) -> LogAuxHiProcEnvIO
+    LogProcO (MsgAux (SimProcRecv _ (MsgEnv _))) -> LogAuxHiProcEnvIO
 
-    Right (MsgEnv _                         ) -> 4
-    Right (MsgAux (SimProcSend _ (MsgEnv _))) -> 4
+    LogProcO (MsgEnv _) -> LogAuxHiProcEnvO
+    LogProcO (MsgAux (SimProcSend _ (MsgEnv _))) -> LogAuxHiProcEnvO
 
-    Left  (MsgHi  _                         ) -> 3
-    Right (MsgHi  _                         ) -> 3
-    Right (MsgAux (SimProcRecv _ (MsgHi  _))) -> 3
-    Right (MsgAux (SimProcSend _ (MsgHi  _))) -> 3
+    LogProcO (MsgAux (SimProcRecv _ (MsgLo _))) -> LogAuxHiProc
+    LogProcO (MsgAux (SimProcSend _ (MsgLo _))) -> LogAuxHiProc
 
-    Right (MsgAux (SimProcRecv _ (MsgLo  _))) -> 2
-    Right (MsgAux (SimProcSend _ (MsgLo  _))) -> 2
+    LogProcI (MsgHi _) -> LogAuxHi
+    LogProcO (MsgHi _) -> LogAuxHi
+    LogProcO (MsgAux (SimProcRecv _ (MsgHi _))) -> LogAuxHi
+    LogProcO (MsgAux (SimProcSend _ (MsgHi _))) -> LogAuxHi
 
-    Right (MsgAux (SimProcSend _ (MsgAux _))) -> 1
-    Right (MsgAux _                         ) -> 1
+    LogProcO (MsgAux (SimProcSend _ (MsgAux _))) -> LogAux
+    LogProcO (MsgAux _) -> LogAux
+    LogLoAux _ -> LogAux
+    LogHiAux _ -> LogAux
 
 runSimIO
   :: forall p xo

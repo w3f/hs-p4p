@@ -28,6 +28,7 @@ module P4P.RT
   ( module P4P.RT.Options
   , module Options.Applicative
   , RTError(..)
+  , LogEvt(..)
   , RTHiIO
   , RTLoIO
   , runProcIO

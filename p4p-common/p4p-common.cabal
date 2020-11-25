@@ -82,6 +82,8 @@ Library
     , transformers
     -- Data.*
     , containers
+    -- Data.Text.*
+    , text
     -- Statistics.Distribution.Pure
     , math-functions
     , statistics
@@ -100,6 +102,7 @@ Library
     Crypto.Random.Extra
     Data.Map.Bounded
     Data.Sequence.Extra
+    Data.Text.Extra
     Data.Type.Reflect
     Statistics.Distribution.Lognormal
     Statistics.Distribution.Pure
