@@ -16,7 +16,8 @@ import           GHC.Generics                      (Generic)
 import           Statistics.Distribution.Lognormal (LognormalDistribution,
                                                     NormalDistribution,
                                                     lognormalDistrMeanStddevErr)
-import           Statistics.Distribution.Weibull   (WeibullDistribution, weibullDistrApproxMeanStddevErr)
+import           Statistics.Distribution.Weibull   (WeibullDistribution,
+                                                    weibullDistrApproxMeanStddevErr)
 
 
 -- | A mean & standard deviation.

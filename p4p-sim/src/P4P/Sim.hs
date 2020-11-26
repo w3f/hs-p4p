@@ -46,8 +46,7 @@ module P4P.Sim
   , optionTerminalStdIO
   , initializeTick
   , KV(..)
-  )
-where
+  ) where
 
 import           Data.List.NonEmpty  (NonEmpty (..))
 import           Options.Applicative
@@ -56,7 +55,7 @@ import           P4P.RT
 import           P4P.RT.Options
 
 import           P4P.Sim.Extension
-import           P4P.Sim.Internal
 import           P4P.Sim.IO
+import           P4P.Sim.Internal
 import           P4P.Sim.Options
 import           P4P.Sim.Types

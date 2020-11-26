@@ -8,15 +8,14 @@ module P4P.Proc.Util
   ( knot2ReactM
   , knot2UReactM
   , Can(..)
-  )
-where
+  ) where
 
 -- external
 import qualified Data.Sequence                    as Seq
 
 import           Control.Applicative              (liftA2)
-import           Control.Lens                     ((%%=), (%=), (^.), _1, _2,
-                                                   _3)
+import           Control.Lens                     (_1, _2, _3, (%%=), (%=),
+                                                   (^.))
 import           Control.Monad.Extra              (whileJustM)
 import           Control.Monad.Trans.Class        (MonadTrans (..))
 import           Control.Monad.Trans.State.Strict (StateT (..), execStateT)
@@ -216,8 +215,8 @@ knot2UReactM selInU mkI1U mkI2U selO1U selO2U mkOutU =
     MsgAux a -> One (MsgAux a)
   selO2 = \case
     MsgEnv e -> One (MsgEnv e)
-    MsgLo l -> One (MsgLo l)
-    MsgHi u -> first MsgHi (selO2U u)
+    MsgLo l  -> One (MsgLo l)
+    MsgHi u  -> first MsgHi (selO2U u)
   mkOut = \case
     Left  (MsgEnv e) -> MsgEnv e
     Left  (MsgLo  l) -> MsgLo l

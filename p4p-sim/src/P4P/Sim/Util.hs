@@ -5,8 +5,7 @@ module P4P.Sim.Util
   ( PMut'
   , getEntropy
   , ChaChaDRGInsecure
-  )
-where
+  ) where
 
 -- external
 import           Crypto.Random.Entropy (getEntropy)

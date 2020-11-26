@@ -17,8 +17,7 @@ module Crypto.Random.Extra
   , ChaChaDRGInsecure
   , module Data.ByteArray
   , module Crypto.Random
-  )
-where
+  ) where
 
 import qualified Crypto.Cipher.ChaCha.Extra as C
 import qualified Data.ByteArray             as B

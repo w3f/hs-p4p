@@ -4,8 +4,7 @@ module Statistics.Distribution.Pure
   ( module Statistics.Distribution
   , drawCont
   , drawDisc
-  )
-where
+  ) where
 
 import           Crypto.Random.Extra     (DRG (..), generateUntil,
                                           randomProbGenerate)

@@ -57,8 +57,7 @@ module P4P.Proc
   -- instances
   , PRef(..)
   , PMut(..)
-  )
-where
+  ) where
 
 import           Data.Schedule      (Tick)
 import           Data.Void          (Void)

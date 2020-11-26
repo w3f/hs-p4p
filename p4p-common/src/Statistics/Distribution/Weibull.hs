@@ -9,8 +9,7 @@ module Statistics.Distribution.Weibull
   , weibullDistrErr
   , weibullStandard
   , weibullDistrApproxMeanStddevErr
-  )
-where
+  ) where
 
 import qualified Data.Vector.Generic             as G
 import           GHC.Generics                    (Generic)

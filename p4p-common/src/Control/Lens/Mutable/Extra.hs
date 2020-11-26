@@ -15,8 +15,7 @@ module Control.Lens.Mutable.Extra
   , newFakeAlloc1
   , FakeAlloc2(..)
   , newFakeAlloc2
-  )
-where
+  ) where
 
 -- external
 import           Control.Lens             (_1, _2, _Wrapped)

@@ -117,24 +117,24 @@ grunSimIO runReact opt mkXState mkPState mkSimUserIO =
 
   msgLv :: LogEvt (SimXI ps xs) (SimXO ps xs) -> SimLogging
   msgLv = \case
-    LogProcI (MsgEnv _) -> LogAuxHiProcEnvIO
+    LogProcI (MsgEnv _)                          -> LogAuxHiProcEnvIO
     LogProcO (MsgAux (SimProcRecv _ (MsgEnv _))) -> LogAuxHiProcEnvIO
 
-    LogProcO (MsgEnv _) -> LogAuxHiProcEnvO
+    LogProcO (MsgEnv _)                          -> LogAuxHiProcEnvO
     LogProcO (MsgAux (SimProcSend _ (MsgEnv _))) -> LogAuxHiProcEnvO
 
-    LogProcO (MsgAux (SimProcRecv _ (MsgLo _))) -> LogAuxHiProc
-    LogProcO (MsgAux (SimProcSend _ (MsgLo _))) -> LogAuxHiProc
+    LogProcO (MsgAux (SimProcRecv _ (MsgLo _)))  -> LogAuxHiProc
+    LogProcO (MsgAux (SimProcSend _ (MsgLo _)))  -> LogAuxHiProc
 
-    LogProcI (MsgHi _) -> LogAuxHi
-    LogProcO (MsgHi _) -> LogAuxHi
-    LogProcO (MsgAux (SimProcRecv _ (MsgHi _))) -> LogAuxHi
-    LogProcO (MsgAux (SimProcSend _ (MsgHi _))) -> LogAuxHi
+    LogProcI (MsgHi _)                           -> LogAuxHi
+    LogProcO (MsgHi _)                           -> LogAuxHi
+    LogProcO (MsgAux (SimProcRecv _ (MsgHi _)))  -> LogAuxHi
+    LogProcO (MsgAux (SimProcSend _ (MsgHi _)))  -> LogAuxHi
 
     LogProcO (MsgAux (SimProcSend _ (MsgAux _))) -> LogAux
-    LogProcO (MsgAux _) -> LogAux
-    LogLoAux _ -> LogAux
-    LogHiAux _ -> LogAux
+    LogProcO (MsgAux _)                          -> LogAux
+    LogLoAux _                                   -> LogAux
+    LogHiAux _                                   -> LogAux
 
 runSimIO
   :: forall p xo

@@ -26,9 +26,9 @@ import qualified P4P.Proc                          as P
 
 import           Codec.Serialise                   (Serialise)
 import           Control.Applicative               (liftA2)
-import           Control.Lens                      (itraversed, traversed,
-                                                    (%%@~), (%%~), (%~), (^?!),
-                                                    _Wrapped)
+import           Control.Lens                      (_Wrapped, itraversed,
+                                                    traversed, (%%@~), (%%~),
+                                                    (%~), (^?!))
 import           Control.Lens.Extra                (unsafeIx)
 import           Control.Lens.Strict               (Ixed (..))
 import           Control.Lens.TH                   (makeWrapped)

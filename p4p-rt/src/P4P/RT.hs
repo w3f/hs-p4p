@@ -51,8 +51,7 @@ module P4P.RT
   , optionTerminalStdIO
   , initializeTick
   , initializeTickAddrs
-  )
-where
+  ) where
 
 import           Options.Applicative
 

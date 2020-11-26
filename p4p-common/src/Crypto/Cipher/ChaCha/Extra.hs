@@ -7,8 +7,7 @@ module Crypto.Cipher.ChaCha.Extra
   , initializePure
   , generatePure
   , module Crypto.Cipher.ChaCha
-  )
-where
+  ) where
 
 import           Codec.Serialise      (Serialise)
 import           Control.DeepSeq      (NFData)

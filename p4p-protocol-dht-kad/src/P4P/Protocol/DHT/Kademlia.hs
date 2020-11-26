@@ -29,8 +29,7 @@ module P4P.Protocol.DHT.Kademlia
   , newRandomState
   -- from Internal
   , kInput
-  )
-where
+  ) where
 
 import           P4P.Protocol.DHT.Kademlia.Internal
 import           P4P.Protocol.DHT.Kademlia.Message

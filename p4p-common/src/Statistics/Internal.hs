@@ -21,8 +21,7 @@ module Statistics.Internal
     -- * Reexports
   , Show(..)
   , Read(..)
-  )
-where
+  ) where
 
 import           Control.Applicative
 import           Control.Monad

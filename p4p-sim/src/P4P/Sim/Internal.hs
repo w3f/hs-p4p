@@ -18,9 +18,9 @@ import qualified Data.Map.Strict                  as M
 import qualified Data.Sequence                    as SQ
 import qualified Data.Set                         as S
 
-import           Control.Lens                     (Iso', anon, contains,
+import           Control.Lens                     (Iso', _1, _2, anon, contains,
                                                    itraversed, use, (%%=),
-                                                   (%%@=), (%=), (.=), _1, _2)
+                                                   (%%@=), (%=), (.=))
 import           Control.Lens.Mutable             (Allocable (..), AsLens (..))
 import           Control.Lens.Mutable.Extra       (FakeAlloc1 (..),
                                                    newFakeAlloc1)

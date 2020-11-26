@@ -2,8 +2,7 @@ module P4P.RT.Node
   ( SockEndpoint(..)
   , parseRecvAddr
   , udpRTLoIO
-  )
-where
+  ) where
 
 -- internal
 import           P4P.RT.Network

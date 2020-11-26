@@ -12,8 +12,7 @@ module P4P.Proc.Instances
   , PMut(..)
   , PrimMonad(..)
   , PrimOpGroup(..)
-  )
-where
+  ) where
 
 -- external
 import           Control.Lens               (Lens', (%%=))

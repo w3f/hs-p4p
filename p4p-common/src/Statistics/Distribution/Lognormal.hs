@@ -10,8 +10,7 @@ module Statistics.Distribution.Lognormal
   , lognormalDistrErr
   , lognormalDistrMeanStddevErr
   , lognormalStandard
-  )
-where
+  ) where
 
 import qualified Data.Vector.Generic             as G
 import           GHC.Generics                    (Generic)
